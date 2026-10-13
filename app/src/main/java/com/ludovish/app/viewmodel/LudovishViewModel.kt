@@ -9,31 +9,44 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.random.Random
 
 class LudovishViewModel : ViewModel() {
 
     private val exceptionHandler = CoroutineExceptionHandler { _, _ ->
-        _uiState.update { it.copy(isRolling = false, statusMessage = "Ready") }
+        _uiState.update { it.copy(isRolling = false) }
     }
 
     private val _uiState = MutableStateFlow(GameUiState())
     val uiState: StateFlow<GameUiState> = _uiState.asStateFlow()
 
     private var careerManager: CareerManager? = null
-    private var lastSnapshot: TurnSnapshot? = null
     private var botJob: Job? = null
+    private var rushBotLoopJob: Job? = null
 
     private val safeStepOffsets = setOf(0, 8, 13, 21, 26, 34, 39, 47)
 
     init {
-        startNewMatch(playerCount = 4, mode = GameMode.CLASSIC)
+        viewModelScope.launch {
+            delay(2100)
+            if (_uiState.value.currentScreen == AppScreen.SPLASH) {
+                _uiState.update { it.copy(currentScreen = AppScreen.LUDO_HOME) }
+            }
+        }
     }
 
     fun attachCareerManager(manager: CareerManager) {
         if (careerManager == null) {
             careerManager = manager
-            _uiState.update { it.copy(careerStats = manager.loadStats()) }
+            _uiState.update {
+                it.copy(
+                    careerStats = manager.loadStats(),
+                    savedGames = manager.loadSavedGames()
+                )
+            }
         }
     }
 
@@ -45,471 +58,645 @@ class LudovishViewModel : ViewModel() {
         }
     }
 
-    fun startNewMatch(
-        playerCount: Int = _uiState.value.playerCount,
-        mode: GameMode = _uiState.value.gameMode
-    ) {
-        botJob?.cancel()
-        lastSnapshot = null
-        val clampedCount = playerCount.coerceIn(2, 10)
-        val existingPlayers = _uiState.value.players
+    // =========================================================================
+    // NAVIGATION, HUB & MODAL CONTROLS
+    // =========================================================================
 
-        val players = List(clampedCount) { index ->
-            val wasBot = existingPlayers.getOrNull(index)?.isBot ?: (index > 0)
-            val customName = existingPlayers.getOrNull(index)?.name ?: TenPlayerNames[index]
-            val initialTokens = List(4) { tokenId ->
-                // In Quick Ludo Mode, Token #0 starts pre-deployed on the start square (progress = 0)
-                val initialProgress = if (mode == GameMode.QUICK_RUSH && tokenId == 0) 0 else -1
-                Token(id = tokenId, playerIndex = index, progress = initialProgress)
-            }
-            Player(
-                index = index,
-                name = customName,
-                color = TenPlayerColors[index],
-                isBot = wasBot,
-                hasCapturedEnemy = false,
-                tokens = initialTokens,
-                rank = null
-            )
-        }
+    fun skipSplash() {
+        _uiState.update { it.copy(currentScreen = AppScreen.LUDO_HOME) }
+    }
 
+    fun switchMainHub(toSnakes: Boolean) {
         _uiState.update {
             it.copy(
-                playerCount = clampedCount,
-                gameMode = mode,
-                players = players,
-                currentTurnIndex = 0,
-                diceValue = 6,
-                isRolling = false,
-                hasRolledThisTurn = false,
-                consecutiveSixes = 0,
-                winnersOrder = emptyList(),
-                canUndo = false,
-                statusMessage = "${players[0].name} • ${mode.title} Mode"
+                currentScreen = if (toSnakes) AppScreen.SNAKES_HOME else AppScreen.LUDO_HOME,
+                activeModal = ActiveModal.NONE
             )
         }
     }
 
-    fun setPlayerCount(count: Int) {
-        startNewMatch(playerCount = count, mode = _uiState.value.gameMode)
-    }
-
-    fun selectGameMode(mode: GameMode) {
-        startNewMatch(playerCount = _uiState.value.playerCount, mode = mode)
-    }
-
-    fun selectTokenStyle(style: TokenStyle) {
-        _uiState.update { it.copy(tokenStyle = style) }
-    }
-
-    fun selectDiceStyle(style: DiceStyle) {
-        _uiState.update { it.copy(diceStyle = style) }
-    }
-
-    fun selectBotDifficulty(difficulty: BotDifficulty) {
-        _uiState.update { it.copy(botDifficulty = difficulty) }
-    }
-
-    /** Toggle any individual seat between Human and AI Bot */
-    fun togglePlayerBotStatus(
-        playerIndex: Int,
-        onDiceEffect: () -> Unit = {},
-        onBonusSixEffect: () -> Unit = {},
-        onStepEffect: (Int) -> Unit = {},
-        onCaptureEffect: () -> Unit = {},
-        onVictoryEffect: () -> Unit = {}
-    ) {
-        _uiState.update { state ->
-            val updated = state.players.map { p ->
-                if (p.index == playerIndex) p.copy(isBot = !p.isBot) else p
-            }
-            state.copy(players = updated)
+    fun selectBottomTab(tab: BottomNavTab) {
+        val modal = when (tab) {
+            BottomNavTab.HOME -> ActiveModal.NONE
+            BottomNavTab.EVENT -> ActiveModal.THEME_COLOR_WHEEL
+            BottomNavTab.ADDA -> ActiveModal.LOAD_SAVED_GAMES
+            BottomNavTab.INVENTORY -> ActiveModal.LUDO_MODE_SELECT
+            BottomNavTab.SOCIAL -> ActiveModal.STATISTICS
         }
-        triggerBotIfNeeded(onDiceEffect, onBonusSixEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+        _uiState.update { it.copy(bottomTab = tab, activeModal = modal) }
     }
 
-    /** Rewind/Undo last move for 100 Coins */
-    fun undoLastMove(): Boolean {
-        val snap = lastSnapshot ?: return false
-        val stats = _uiState.value.careerStats
-        if (stats.coins < 100 || _uiState.value.isRolling) return false
-
-        botJob?.cancel()
-        updateCareer { it.copy(coins = (it.coins - 100).coerceAtLeast(0)) }
+    fun openModal(modal: ActiveModal) {
+        val timestamp = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss", Locale.ENGLISH).format(Date())
         _uiState.update {
             it.copy(
-                players = snap.players,
-                currentTurnIndex = snap.currentTurnIndex,
-                diceValue = snap.diceValue,
-                winnersOrder = snap.winnersOrder,
-                hasRolledThisTurn = false,
-                isRolling = false,
-                canUndo = false,
-                statusMessage = "Move Rewound (-100 Coins) • Roll Again!"
+                activeModal = modal,
+                saveTimestampPreview = timestamp,
+                showBottomLeftMenuPopup = false
             )
         }
-        lastSnapshot = null
-        return true
     }
 
-    fun toggleSoundEnabled(): Boolean {
+    fun closeModal() {
+        _uiState.update { it.copy(activeModal = ActiveModal.NONE, bottomTab = BottomNavTab.HOME) }
+    }
+
+    fun toggleBottomLeftMenu() {
+        _uiState.update { it.copy(showBottomLeftMenuPopup = !it.showBottomLeftMenuPopup) }
+    }
+
+    // =========================================================================
+    // PROFILE, SETTINGS & LIQUID GLASS CUSTOMIZATION
+    // =========================================================================
+
+    fun updateProfile(name: String, status: String, country: String, avatarIdx: Int) {
+        updateCareer {
+            it.copy(
+                playerName = name.ifBlank { "TrollDrako" },
+                statusText = status,
+                country = country,
+                avatarIndex = avatarIdx
+            )
+        }
+    }
+
+    fun spinDailyWheelReward(): Int {
+        val reward = listOf(250, 500, 1200, 750, 1500).random()
+        updateCareer { it.copy(coins = it.coins + reward, xp = it.xp + 30) }
+        return reward
+    }
+
+    fun toggleSound(): Boolean {
         val next = !_uiState.value.soundEnabled
         _uiState.update { it.copy(soundEnabled = next) }
         return next
     }
 
-    fun updateSoundVolume(volume: Float) {
-        _uiState.update { it.copy(soundVolume = volume.coerceIn(0f, 1f)) }
+    fun toggleMusic() {
+        _uiState.update { it.copy(musicEnabled = !it.musicEnabled) }
+    }
+
+    fun toggleVibration() {
+        _uiState.update { it.copy(vibrationEnabled = !it.vibrationEnabled) }
+    }
+
+    fun setThemeMode(mode: AppThemeMode) {
+        _uiState.update { it.copy(themeMode = mode) }
     }
 
     fun updateGlassSlider(value: Float) {
         _uiState.update { it.copy(glassValue = value.coerceIn(0f, 1f)) }
     }
 
-    fun selectPalette(palette: ThemePalette) {
-        _uiState.update { it.copy(selectedPalette = palette, useCustomColor = false) }
+    fun updatePrimaryThemeHue(hue: Float) {
+        _uiState.update { it.copy(primaryThemeHue = hue.coerceIn(0f, 360f)) }
     }
 
-    fun updateCustomHue(hue: Float) {
-        _uiState.update { it.copy(customHue = hue.coerceIn(0f, 360f), useCustomColor = true) }
+    fun updateCustomAccentColor(color: Color) {
+        _uiState.update { it.copy(customAccentColor = color) }
     }
 
-    fun selectDockSection(section: DockSection) {
-        _uiState.update { it.copy(activeSheet = section) }
+    fun selectBoardTheme(theme: LudoBoardTheme) {
+        _uiState.update { it.copy(boardTheme = theme) }
     }
 
-    fun rollDice(
-        onDiceEffect: () -> Unit,
-        onBonusSixEffect: () -> Unit,
-        onStepEffect: (Int) -> Unit,
-        onCaptureEffect: () -> Unit,
-        onVictoryEffect: () -> Unit
-    ) {
+    // =========================================================================
+    // LUDO PRE-MATCH LOBBY & SETUP (2P TO 10P)
+    // =========================================================================
+
+    fun openLudoSetupForHub(entryType: HubEntryType) {
+        val defaultMode = when (entryType) {
+            HubEntryType.TEAM_UP -> GameMode.TEAM_UP
+            else -> GameMode.CLASSIC
+        }
+        val slots = List(10) { idx ->
+            val isBot = when (entryType) {
+                HubEntryType.COMPUTER, HubEntryType.TOURNAMENT -> idx > 0
+                else -> false
+            }
+            val name = when {
+                entryType == HubEntryType.COMPUTER && idx == 0 -> "You"
+                entryType == HubEntryType.COMPUTER -> "Computer ${if (idx == 1) "" else idx}".trim()
+                else -> "Player ${idx + 1}"
+            }
+            PlayerLobbySlot(slotIndex = idx, name = name, colorIndex = idx, isBot = isBot)
+        }
+        _uiState.update {
+            it.copy(
+                hubEntryType = entryType,
+                gameMode = defaultMode,
+                playerCount = if (entryType == HubEntryType.COMPUTER) 2 else 4,
+                lobbySlots = slots,
+                activeModal = ActiveModal.LUDO_MODE_SELECT
+            )
+        }
+    }
+
+    fun selectTokenStyle(style: TokenStyle) {
+        _uiState.update { it.copy(tokenStyle = style) }
+    }
+
+    fun selectGameMode(mode: GameMode) {
+        _uiState.update {
+            it.copy(
+                gameMode = mode,
+                playerCount = if (mode == GameMode.TEAM_UP) 4 else it.playerCount
+            )
+        }
+    }
+
+    fun proceedToPlayerSetup() {
+        _uiState.update { it.copy(activeModal = ActiveModal.LUDO_PLAYER_SETUP) }
+    }
+
+    fun setLobbyPlayerCount(count: Int) {
+        _uiState.update { it.copy(playerCount = count.coerceIn(2, 10)) }
+    }
+
+    fun updateLobbySlotName(slotIndex: Int, newName: String) {
+        _uiState.update { state ->
+            val updated = state.lobbySlots.map {
+                if (it.slotIndex == slotIndex) it.copy(name = newName) else it
+            }
+            state.copy(lobbySlots = updated)
+        }
+    }
+
+    fun cycleLobbySlotColor(slotIndex: Int) {
+        _uiState.update { state ->
+            val updated = state.lobbySlots.map {
+                if (it.slotIndex == slotIndex) {
+                    it.copy(colorIndex = (it.colorIndex + 1) % TenPlayerColors.size)
+                } else it
+            }
+            state.copy(lobbySlots = updated)
+        }
+    }
+
+    fun toggleLobbySlotBot(slotIndex: Int) {
+        _uiState.update { state ->
+            val updated = state.lobbySlots.map {
+                if (it.slotIndex == slotIndex) {
+                    val nextBot = !it.isBot
+                    val nextName = if (nextBot) "Bot" else "Player ${slotIndex + 1}"
+                    it.copy(isBot = nextBot, name = nextName)
+                } else it
+            }
+            state.copy(lobbySlots = updated)
+        }
+    }
+
+    fun toggleFriendlyKill() {
+        _uiState.update { it.copy(friendlyKillEnabled = !it.friendlyKillEnabled) }
+    }
+
+    fun requestStartLudoMatch(oneTokenOut: Boolean) {
+        if (oneTokenOut) {
+            _uiState.update {
+                it.copy(
+                    pendingOneTokenOut = true,
+                    activeModal = ActiveModal.KEEP_ONE_TOKEN_OUT_PROMPT
+                )
+            }
+        } else {
+            launchLudoMatch(oneTokenOut = false)
+        }
+    }
+
+    fun confirmKeepOneTokenOutAndStart() {
+        launchLudoMatch(oneTokenOut = true)
+    }
+
+    fun launchLudoMatch(oneTokenOut: Boolean) {
+        botJob?.cancel()
+        rushBotLoopJob?.cancel()
+
         val state = _uiState.value
-        if (state.isRolling || state.hasRolledThisTurn) return
-
-        // Save snapshot before human turn for Undo support
-        val currentPlayer = state.players.getOrNull(state.currentTurnIndex) ?: return
-        if (!currentPlayer.isBot) {
-            lastSnapshot = TurnSnapshot(
-                players = state.players,
-                currentTurnIndex = state.currentTurnIndex,
-                diceValue = state.diceValue,
-                winnersOrder = state.winnersOrder
+        val count = state.playerCount.coerceIn(2, 10)
+        val players = List(count) { idx ->
+            val slot = state.lobbySlots[idx]
+            val pColor = TenPlayerColors[slot.colorIndex % TenPlayerColors.size]
+            val tokens = List(4) { tId ->
+                val startOut = (oneTokenOut || state.gameMode == GameMode.QUICK || state.gameMode == GameMode.RUSH_MODE) && tId == 0
+                Token(id = tId, playerIndex = idx, progress = if (startOut) 0 else -1)
+            }
+            Player(
+                index = idx,
+                name = slot.name.ifBlank { "Player ${idx + 1}" },
+                colorIndex = slot.colorIndex,
+                color = pColor,
+                isBot = slot.isBot,
+                teamId = idx % 2,
+                diceValue = 1,
+                tokens = tokens
             )
         }
 
+        _uiState.update {
+            it.copy(
+                currentScreen = AppScreen.LUDO_GAMEPLAY,
+                activeModal = ActiveModal.NONE,
+                players = players,
+                currentTurnIndex = 0,
+                diceValue = 1,
+                isRolling = false,
+                hasRolledThisTurn = false,
+                consecutiveSixes = 0,
+                winnersOrder = emptyList(),
+                showGameStartBanner = true,
+                showBottomLeftMenuPopup = false,
+                statusMessage = "${players[0].name}'s Turn"
+            )
+        }
+
+        viewModelScope.launch {
+            delay(1450)
+            _uiState.update { it.copy(showGameStartBanner = false) }
+            if (_uiState.value.gameMode == GameMode.RUSH_MODE) {
+                startRushModeAutonomousBotLoop()
+            } else {
+                triggerBotIfNeeded()
+            }
+        }
+    }
+
+    // =========================================================================
+    // SAVE & LOAD GAME DATABASE ENGINE
+    // =========================================================================
+
+    fun saveCurrentGameAndExit() {
+        val state = _uiState.value
+        if (state.players.isEmpty()) {
+            exitToHome()
+            return
+        }
+        val record = SavedGameRecord(
+            id = "save_${System.currentTimeMillis()}",
+            timestamp = state.saveTimestampPreview.ifBlank {
+                SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss", Locale.ENGLISH).format(Date())
+            },
+            playerCount = state.playerCount,
+            gameModeName = state.gameMode.name,
+            oneTokenOut = state.pendingOneTokenOut,
+            friendlyKill = state.friendlyKillEnabled,
+            currentTurnIndex = state.currentTurnIndex,
+            playerNames = state.players.map { it.name },
+            playerColorIndices = state.players.map { it.colorIndex },
+            playerBots = state.players.map { it.isBot },
+            tokenProgressFlat = state.players.flatMap { p -> p.tokens.map { it.progress } }
+        )
+        val updatedList = listOf(record) + state.savedGames
+        careerManager?.saveGamesList(updatedList)
+        _uiState.update {
+            it.copy(
+                savedGames = updatedList,
+                currentScreen = AppScreen.LUDO_HOME,
+                activeModal = ActiveModal.NONE,
+                showBottomLeftMenuPopup = false
+            )
+        }
+    }
+
+    fun deleteSavedGame(id: String) {
+        val updated = _uiState.value.savedGames.filterNot { it.id == id }
+        careerManager?.saveGamesList(updated)
+        _uiState.update { it.copy(savedGames = updated) }
+    }
+
+    fun resumeSavedGame(record: SavedGameRecord) {
+        botJob?.cancel()
+        rushBotLoopJob?.cancel()
+
+        val mode = runCatching { GameMode.valueOf(record.gameModeName) }.getOrDefault(GameMode.CLASSIC)
+        val count = record.playerCount.coerceIn(2, 10)
+        val players = List(count) { pIdx ->
+            val cIdx = record.playerColorIndices.getOrElse(pIdx) { pIdx }
+            val tokens = List(4) { tIdx ->
+                val flatIdx = pIdx * 4 + tIdx
+                val prog = record.tokenProgressFlat.getOrElse(flatIdx) { -1 }
+                Token(id = tIdx, playerIndex = pIdx, progress = prog)
+            }
+            Player(
+                index = pIdx,
+                name = record.playerNames.getOrElse(pIdx) { "Player ${pIdx + 1}" },
+                colorIndex = cIdx,
+                color = TenPlayerColors[cIdx % TenPlayerColors.size],
+                isBot = record.playerBots.getOrElse(pIdx) { false },
+                teamId = pIdx % 2,
+                tokens = tokens
+            )
+        }
+
+        _uiState.update {
+            it.copy(
+                currentScreen = AppScreen.LUDO_GAMEPLAY,
+                activeModal = ActiveModal.NONE,
+                playerCount = count,
+                gameMode = mode,
+                friendlyKillEnabled = record.friendlyKill,
+                players = players,
+                currentTurnIndex = record.currentTurnIndex.coerceIn(0, count - 1),
+                hasRolledThisTurn = false,
+                isRolling = false,
+                showGameStartBanner = true
+            )
+        }
+        viewModelScope.launch {
+            delay(1100)
+            _uiState.update { it.copy(showGameStartBanner = false) }
+            triggerBotIfNeeded()
+        }
+    }
+
+    fun exitToHome() {
+        botJob?.cancel()
+        rushBotLoopJob?.cancel()
+        _uiState.update {
+            it.copy(
+                currentScreen = if (it.currentScreen == AppScreen.SNAKES_GAMEPLAY) AppScreen.SNAKES_HOME else AppScreen.LUDO_HOME,
+                activeModal = ActiveModal.NONE,
+                showBottomLeftMenuPopup = false
+            )
+        }
+    }
+
+    // =========================================================================
+    // ACTIVE LUDO GAMEPLAY & RUSH MODE ENGINE
+    // =========================================================================
+
+    fun rollDiceForPlayer(
+        playerIndex: Int = _uiState.value.currentTurnIndex,
+        onDiceEffect: () -> Unit = {},
+        onStepEffect: (Int) -> Unit = {},
+        onCaptureEffect: () -> Unit = {},
+        onVictoryEffect: () -> Unit = {}
+    ) {
+        val state = _uiState.value
+        if (state.gameMode == GameMode.RUSH_MODE) {
+            rollRushModeForPlayer(playerIndex, onDiceEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+            return
+        }
+
+        if (playerIndex != state.currentTurnIndex || state.isRolling || state.hasRolledThisTurn) return
+
         viewModelScope.launch(exceptionHandler) {
             onDiceEffect()
-            _uiState.update { it.copy(isRolling = true, statusMessage = "Rolling...") }
+            _uiState.update { it.copy(isRolling = true) }
 
             withContext(Dispatchers.Default) {
                 repeat(7) {
                     delay(40)
-                    _uiState.update { s -> s.copy(diceValue = Random.nextInt(1, 7)) }
+                    val tempFace = Random.nextInt(1, 7)
+                    _uiState.update { s ->
+                        s.copy(
+                            diceValue = tempFace,
+                            players = s.players.map { p ->
+                                if (p.index == playerIndex) p.copy(diceValue = tempFace, isRolling = true) else p
+                            }
+                        )
+                    }
                 }
             }
 
             val rolled = Random.nextInt(1, 7)
-            if (rolled == 6) {
-                onBonusSixEffect()
-                if (!currentPlayer.isBot) {
-                    updateCareer { it.copy(sixesRolled = it.sixesRolled + 1, xp = it.xp + 5) }
-                }
-            }
-
+            val currentPlayer = _uiState.value.players[playerIndex]
             val newSixCount = if (rolled == 6) state.consecutiveSixes + 1 else 0
+
             if (newSixCount >= 3) {
-                _uiState.update {
-                    it.copy(
+                _uiState.update { s ->
+                    s.copy(
                         diceValue = rolled,
                         isRolling = false,
                         hasRolledThisTurn = false,
                         consecutiveSixes = 0,
-                        statusMessage = "Three 6s! Turn forfeited"
+                        players = s.players.map { p ->
+                            if (p.index == playerIndex) p.copy(diceValue = rolled, isRolling = false) else p
+                        }
                     )
                 }
-                delay(650)
-                advanceToNextTurn(onDiceEffect, onBonusSixEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+                delay(550)
+                advanceToNextTurn(onDiceEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
                 return@launch
             }
 
-            // Team Up Mode: If current player finished, control teammate's tokens!
-            val effectiveController = resolveControllingPlayer(currentPlayer, _uiState.value)
-            val movableTokens = effectiveController.tokens.filter {
-                it.canMove(rolled, state.gameMode, effectiveController.hasCapturedEnemy)
-            }
-
-            _uiState.update {
-                it.copy(
+            val movable = currentPlayer.tokens.filter { it.canMove(rolled) }
+            _uiState.update { s ->
+                s.copy(
                     diceValue = rolled,
                     isRolling = false,
                     hasRolledThisTurn = true,
                     consecutiveSixes = newSixCount,
-                    canUndo = lastSnapshot != null,
-                    statusMessage = if (movableTokens.isEmpty()) {
-                        if (state.gameMode == GameMode.MASTER && !effectiveController.hasCapturedEnemy)
-                            "Rolled $rolled — Capture an enemy to enter Home!"
-                        else "Rolled $rolled — No movable tokens"
-                    } else {
-                        "Rolled $rolled — Tap a glowing ${effectiveController.name} token"
+                    players = s.players.map { p ->
+                        if (p.index == playerIndex) p.copy(diceValue = rolled, isRolling = false) else p
                     }
                 )
             }
 
-            if (movableTokens.isEmpty()) {
-                delay(700)
-                advanceToNextTurn(onDiceEffect, onBonusSixEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
-            } else if (movableTokens.size == 1 || currentPlayer.isBot) {
-                delay(if (currentPlayer.isBot) 420 else 220)
-                val chosen = chooseSmartAiToken(effectiveController, movableTokens, rolled, _uiState.value)
-                moveToken(chosen.id, onDiceEffect, onBonusSixEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+            if (movable.isEmpty()) {
+                delay(600)
+                advanceToNextTurn(onDiceEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+            } else if (movable.size == 1 || currentPlayer.isBot) {
+                delay(if (currentPlayer.isBot) 380 else 190)
+                val chosen = chooseBestToken(currentPlayer, movable, rolled)
+                moveToken(chosen.playerIndex, chosen.id, onDiceEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
             }
         }
     }
 
-    private fun resolveControllingPlayer(player: Player, state: GameUiState): Player {
-        if (state.gameMode == GameMode.TEAM_UP && player.hasMetWinCondition(state.gameMode)) {
-            val teammateIdx = (player.index + 2) % state.playerCount
-            val teammate = state.players.getOrNull(teammateIdx)
-            if (teammate != null && !teammate.hasMetWinCondition(state.gameMode)) {
-                return teammate
-            }
-        }
-        return player
-    }
-
-    /** Multi-tier Offline AI Heuristics (Easy, Tactical, Grandmaster) */
-    private fun chooseSmartAiToken(
-        player: Player,
-        candidates: List<Token>,
-        dice: Int,
-        state: GameUiState
-    ): Token {
-        if (state.botDifficulty == BotDifficulty.EASY) {
-            return candidates.random()
-        }
-
-        return candidates.maxByOrNull { token ->
-            var score = 0
-            val target = if (token.isInBase) 0 else token.progress + dice
-
-            // 1. Highest priority: Entering Crown (56)
-            if (target == 56) score += 500
-
-            // 2. High priority: Capturing an opponent token
-            if (target in 0..50 && target !in safeStepOffsets) {
-                val globalTarget = toGlobalTrackPosition(player.index, target, state.playerCount)
-                val canCapture = state.players.any { opp ->
-                    opp.index != player.index &&
-                        !areAllies(player.index, opp.index, state.gameMode) &&
-                        opp.tokens.count {
-                            it.progress in 0..50 &&
-                                it.progress !in safeStepOffsets &&
-                                toGlobalTrackPosition(opp.index, it.progress, state.playerCount) == globalTarget
-                        } == 1
-                }
-                if (canCapture) score += 420
-            }
-
-            // 3. Deploying from Home Base on a 6
-            if (token.isInBase && dice == 6) score += 280
-
-            // 4. Landing on a Star Safe Zone
-            if (target in safeStepOffsets) score += 190
-
-            // 5. Grandmaster AI: Escape danger if currently on an unsafe tile near an enemy
-            if (state.botDifficulty == BotDifficulty.GRANDMASTER && token.progress in 1..50 && token.progress !in safeStepOffsets) {
-                score += 95
-            }
-
-            // 6. Prefer advancing the lead token
-            score += token.progress * 2
-            score
-        } ?: candidates.first()
-    }
-
-    fun moveToken(
-        tokenId: Int,
+    private fun rollRushModeForPlayer(
+        playerIndex: Int,
         onDiceEffect: () -> Unit,
-        onBonusSixEffect: () -> Unit,
         onStepEffect: (Int) -> Unit,
         onCaptureEffect: () -> Unit,
         onVictoryEffect: () -> Unit
     ) {
-        val state = _uiState.value
-        if (!state.hasRolledThisTurn || state.isRolling) return
-
-        val turnOwner = state.players.getOrNull(state.currentTurnIndex) ?: return
-        val controller = resolveControllingPlayer(turnOwner, state)
-        val playerIndex = controller.index
-        val token = controller.tokens.firstOrNull { it.id == tokenId } ?: return
-        val dice = state.diceValue
-
-        if (!token.canMove(dice, state.gameMode, controller.hasCapturedEnemy)) return
+        val player = _uiState.value.players.getOrNull(playerIndex) ?: return
+        if (player.isRolling) return
 
         viewModelScope.launch(exceptionHandler) {
-            _uiState.update { it.copy(isRolling = true) }
-
-            if (token.isInBase && dice == 6) {
-                onStepEffect(0)
-                onBonusSixEffect()
-                updateTokenProgress(playerIndex, tokenId, 0)
-                _uiState.update {
-                    it.copy(
-                        isRolling = false,
-                        hasRolledThisTurn = false,
-                        statusMessage = "${controller.name} deployed a token! Bonus Roll!"
-                    )
-                }
-                triggerBotIfNeeded(onDiceEffect, onBonusSixEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
-                return@launch
+            onDiceEffect()
+            _uiState.update { s ->
+                s.copy(players = s.players.map { if (it.index == playerIndex) it.copy(isRolling = true) else it })
             }
-
-            val startProgress = token.progress
-            val targetProgress = startProgress + dice
-            var hopIndex = 0
-            for (step in (startProgress + 1)..targetProgress) {
-                onStepEffect(hopIndex++)
-                updateTokenProgress(playerIndex, tokenId, step)
-                delay(72)
+            delay(240)
+            val rolled = Random.nextInt(1, 7)
+            _uiState.update { s ->
+                s.copy(players = s.players.map { if (it.index == playerIndex) it.copy(diceValue = rolled, isRolling = false) else it })
             }
-
-            var capturedOpponent = false
-            if (targetProgress in 0..50) {
-                capturedOpponent = checkAndExecuteCapture(playerIndex, targetProgress)
-                if (capturedOpponent) {
-                    onCaptureEffect()
-                    if (!turnOwner.isBot) {
-                        updateCareer {
-                            it.copy(
-                                tokensCaptured = it.tokensCaptured + 1,
-                                coins = it.coins + 50,
-                                xp = it.xp + 25
-                            )
-                        }
-                    }
-                }
-            }
-
-            val reachedCrown = targetProgress == 56
-            if (reachedCrown) {
-                onVictoryEffect()
-                if (!turnOwner.isBot) {
-                    updateCareer { it.copy(coins = it.coins + 100, xp = it.xp + 40) }
-                }
-            }
-
-            val updatedController = _uiState.value.players[playerIndex]
-            val currentMode = _uiState.value.gameMode
-            if (updatedController.hasMetWinCondition(currentMode) && playerIndex !in _uiState.value.winnersOrder) {
-                onVictoryEffect()
-                val newWinners = _uiState.value.winnersOrder + playerIndex
-                val rank = newWinners.size
-                val rankedPlayers = _uiState.value.players.map {
-                    if (it.index == playerIndex) it.copy(rank = rank) else it
-                }
-                if (!turnOwner.isBot) {
-                    updateCareer {
-                        it.copy(
-                            matchesPlayed = it.matchesPlayed + 1,
-                            matchesWon = if (rank == 1) it.matchesWon + 1 else it.matchesWon,
-                            coins = it.coins + if (rank == 1) 500 else 150,
-                            xp = it.xp + if (rank == 1) 150 else 60
-                        )
-                    }
-                }
-                _uiState.update {
-                    it.copy(
-                        players = rankedPlayers,
-                        winnersOrder = newWinners,
-                        statusMessage = "🏆 ${updatedController.name} won Rank #$rank!"
-                    )
-                }
-            }
-
-            val earnsBonusTurn = (dice == 6 || capturedOpponent || reachedCrown) &&
-                !_uiState.value.players[playerIndex].hasMetWinCondition(currentMode)
-
-            if (earnsBonusTurn) {
-                val bonusReason = when {
-                    capturedOpponent -> "Captured Enemy! +Bonus Roll!"
-                    reachedCrown -> "Crown Reached! +Bonus Roll!"
-                    else -> "Rolled a 6! +Bonus Roll!"
-                }
-                _uiState.update {
-                    it.copy(
-                        isRolling = false,
-                        hasRolledThisTurn = false,
-                        statusMessage = "${controller.name}: $bonusReason"
-                    )
-                }
-                triggerBotIfNeeded(onDiceEffect, onBonusSixEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
-            } else {
-                _uiState.update { it.copy(isRolling = false) }
-                advanceToNextTurn(onDiceEffect, onBonusSixEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+            val updatedPlayer = _uiState.value.players[playerIndex]
+            val movable = updatedPlayer.tokens.filter { it.canMove(rolled) }
+            if (movable.isNotEmpty()) {
+                val chosen = chooseBestToken(updatedPlayer, movable, rolled)
+                stepAndResolveToken(playerIndex, chosen.id, rolled, onStepEffect, onCaptureEffect, onVictoryEffect)
             }
         }
     }
 
-    private fun areAllies(p1: Int, p2: Int, mode: GameMode): Boolean {
-        if (mode != GameMode.TEAM_UP) return false
-        return (p1 % 2) == (p2 % 2)
+    private fun startRushModeAutonomousBotLoop() {
+        rushBotLoopJob?.cancel()
+        rushBotLoopJob = viewModelScope.launch(exceptionHandler) {
+            while (isActive && _uiState.value.currentScreen == AppScreen.LUDO_GAMEPLAY && _uiState.value.gameMode == GameMode.RUSH_MODE) {
+                delay(1350)
+                val bots = _uiState.value.players.filter { it.isBot && !it.hasMetWinCondition(GameMode.RUSH_MODE) }
+                bots.forEach { bot ->
+                    launch {
+                        delay(Random.nextLong(100, 600))
+                        rollRushModeForPlayer(bot.index, {}, {}, {}, {})
+                    }
+                }
+            }
+        }
+    }
+
+    private fun chooseBestToken(player: Player, candidates: List<Token>, dice: Int): Token {
+        candidates.firstOrNull { it.progress + dice == 56 }?.let { return it }
+        if (dice == 6) {
+            candidates.firstOrNull { it.isInBase }?.let { return it }
+        }
+        return candidates.maxByOrNull { it.progress } ?: candidates.first()
+    }
+
+    fun moveToken(
+        playerIndex: Int,
+        tokenId: Int,
+        onDiceEffect: () -> Unit = {},
+        onStepEffect: (Int) -> Unit = {},
+        onCaptureEffect: () -> Unit = {},
+        onVictoryEffect: () -> Unit = {}
+    ) {
+        val state = _uiState.value
+        if (state.gameMode != GameMode.RUSH_MODE) {
+            if (playerIndex != state.currentTurnIndex || !state.hasRolledThisTurn || state.isRolling) return
+        }
+        val player = state.players.getOrNull(playerIndex) ?: return
+        val token = player.tokens.firstOrNull { it.id == tokenId } ?: return
+        val dice = if (state.gameMode == GameMode.RUSH_MODE) player.diceValue else state.diceValue
+        if (!token.canMove(dice)) return
+
+        viewModelScope.launch(exceptionHandler) {
+            _uiState.update { it.copy(isRolling = true) }
+            val earnedBonus = stepAndResolveToken(playerIndex, tokenId, dice, onStepEffect, onCaptureEffect, onVictoryEffect)
+            _uiState.update { it.copy(isRolling = false) }
+
+            if (state.gameMode != GameMode.RUSH_MODE) {
+                if (earnedBonus) {
+                    _uiState.update { it.copy(hasRolledThisTurn = false) }
+                    triggerBotIfNeeded(onDiceEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+                } else {
+                    advanceToNextTurn(onDiceEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+                }
+            }
+        }
+    }
+
+    private suspend fun stepAndResolveToken(
+        playerIndex: Int,
+        tokenId: Int,
+        dice: Int,
+        onStepEffect: (Int) -> Unit,
+        onCaptureEffect: () -> Unit,
+        onVictoryEffect: () -> Unit
+    ): Boolean {
+        val player = _uiState.value.players.getOrNull(playerIndex) ?: return false
+        val token = player.tokens.firstOrNull { it.id == tokenId } ?: return false
+
+        if (token.isInBase && dice == 6) {
+            onStepEffect(0)
+            updateTokenProgress(playerIndex, tokenId, 0)
+            return true
+        }
+
+        val start = token.progress
+        val target = start + dice
+        var hop = 0
+        for (step in (start + 1)..target) {
+            onStepEffect(hop++)
+            updateTokenProgress(playerIndex, tokenId, step)
+            delay(68)
+        }
+
+        var captured = false
+        if (target in 0..50) {
+            captured = checkAndExecuteCapture(playerIndex, target)
+            if (captured) {
+                onCaptureEffect()
+                if (!player.isBot) {
+                    updateCareer { it.copy(tokensCaptured = it.tokensCaptured + 1, coins = it.coins + 50, xp = it.xp + 20) }
+                }
+            }
+        }
+
+        val reachedHome = target == 56
+        if (reachedHome) onVictoryEffect()
+
+        val updatedPlayer = _uiState.value.players[playerIndex]
+        val mode = _uiState.value.gameMode
+        if (updatedPlayer.hasMetWinCondition(mode) && playerIndex !in _uiState.value.winnersOrder) {
+            onVictoryEffect()
+            val newWinners = _uiState.value.winnersOrder + playerIndex
+            val rank = newWinners.size
+            _uiState.update { s ->
+                s.copy(
+                    winnersOrder = newWinners,
+                    players = s.players.map { if (it.index == playerIndex) it.copy(rank = rank) else it }
+                )
+            }
+            if (!updatedPlayer.isBot && rank == 1) {
+                updateCareer {
+                    it.copy(
+                        gamesWon = it.gamesWon + 1,
+                        winStreak = it.winStreak + 1,
+                        coins = it.coins + 400,
+                        xp = it.xp + 120
+                    )
+                }
+            }
+        }
+
+        return (dice == 6 || captured || reachedHome) && !_uiState.value.players[playerIndex].hasMetWinCondition(mode)
     }
 
     private fun updateTokenProgress(playerIndex: Int, tokenId: Int, newProgress: Int) {
         _uiState.update { state ->
-            val updatedPlayers = state.players.map { p ->
-                if (p.index != playerIndex) p
-                else p.copy(
-                    tokens = p.tokens.map { t ->
-                        if (t.id == tokenId) t.copy(progress = newProgress) else t
-                    }
-                )
-            }
-            state.copy(players = updatedPlayers)
+            state.copy(
+                players = state.players.map { p ->
+                    if (p.index != playerIndex) p
+                    else p.copy(tokens = p.tokens.map { t -> if (t.id == tokenId) t.copy(progress = newProgress) else t })
+                }
+            )
         }
     }
 
     private fun toGlobalTrackPosition(playerIndex: Int, relativeProgress: Int, totalPlayers: Int): Int {
         val ringSize = 52
-        val playerOffset = (playerIndex * (ringSize / totalPlayers.coerceAtLeast(2))) % ringSize
-        return (playerOffset + relativeProgress) % ringSize
+        val offset = (playerIndex * (ringSize / totalPlayers.coerceAtLeast(2))) % ringSize
+        return (offset + relativeProgress) % ringSize
     }
 
     private fun checkAndExecuteCapture(activePlayerIndex: Int, targetRelativeProgress: Int): Boolean {
         if (targetRelativeProgress in safeStepOffsets) return false
-
         val state = _uiState.value
-        val totalPlayers = state.playerCount
-        val activeGlobalSlot = toGlobalTrackPosition(activePlayerIndex, targetRelativeProgress, totalPlayers)
+        val activePlayer = state.players[activePlayerIndex]
+        val activeGlobal = toGlobalTrackPosition(activePlayerIndex, targetRelativeProgress, state.playerCount)
 
         var anyCaptured = false
         val updatedPlayers = state.players.map { opponent ->
-            if (opponent.index == activePlayerIndex || areAllies(activePlayerIndex, opponent.index, state.gameMode)) {
+            val isTeammate = state.gameMode == GameMode.TEAM_UP && opponent.teamId == activePlayer.teamId
+            if (opponent.index == activePlayerIndex || (isTeammate && !state.friendlyKillEnabled)) {
                 opponent
             } else {
-                val opponentsOnSlot = opponent.tokens.filter { t ->
+                val victims = opponent.tokens.filter { t ->
                     t.progress in 0..50 &&
                         t.progress !in safeStepOffsets &&
-                        toGlobalTrackPosition(opponent.index, t.progress, totalPlayers) == activeGlobalSlot
+                        toGlobalTrackPosition(opponent.index, t.progress, state.playerCount) == activeGlobal
                 }
-                if (opponentsOnSlot.size == 1) {
+                if (victims.size == 1) {
                     anyCaptured = true
-                    val victimId = opponentsOnSlot.first().id
-                    opponent.copy(
-                        tokens = opponent.tokens.map { t ->
-                            if (t.id == victimId) t.copy(progress = -1) else t
-                        }
-                    )
-                } else {
-                    opponent
-                }
+                    val vId = victims.first().id
+                    opponent.copy(tokens = opponent.tokens.map { if (it.id == vId) it.copy(progress = -1) else it })
+                } else opponent
             }
-        }.map { p ->
-            if (anyCaptured && p.index == activePlayerIndex) p.copy(hasCapturedEnemy = true) else p
         }
-
         if (anyCaptured) {
             _uiState.update { it.copy(players = updatedPlayers) }
         }
@@ -518,82 +705,154 @@ class LudovishViewModel : ViewModel() {
 
     private fun advanceToNextTurn(
         onDiceEffect: () -> Unit,
-        onBonusSixEffect: () -> Unit,
         onStepEffect: (Int) -> Unit,
         onCaptureEffect: () -> Unit,
         onVictoryEffect: () -> Unit
     ) {
         val state = _uiState.value
-        val mode = state.gameMode
+        val activeRemaining = state.players.filter { !it.hasMetWinCondition(state.gameMode) }
+        if (activeRemaining.size <= 1) return
 
-        // In Quick Ludo, first winner ends the match immediately
-        if (mode == GameMode.QUICK_RUSH && state.winnersOrder.isNotEmpty()) {
-            val champ = state.players[state.winnersOrder.first()]
-            _uiState.update {
-                it.copy(
-                    hasRolledThisTurn = false,
-                    isRolling = false,
-                    statusMessage = "🏆 ${champ.name} Won Quick Ludo!"
-                )
-            }
-            return
-        }
-
-        val activePlayers = state.players.filter { !it.hasMetWinCondition(mode) }
-        if (activePlayers.size <= 1) {
-            _uiState.update {
-                it.copy(
-                    hasRolledThisTurn = false,
-                    isRolling = false,
-                    statusMessage = "Match Complete! Open Modes to start again."
-                )
-            }
-            return
-        }
-
-        var nextIndex = (state.currentTurnIndex + 1) % state.playerCount
+        var nextIdx = (state.currentTurnIndex + 1) % state.playerCount
         var guard = 0
-        while (state.players[nextIndex].hasMetWinCondition(mode) &&
-            resolveControllingPlayer(state.players[nextIndex], state).hasMetWinCondition(mode) &&
-            guard < state.playerCount
-        ) {
-            nextIndex = (nextIndex + 1) % state.playerCount
+        while (state.players[nextIdx].hasMetWinCondition(state.gameMode) && guard < state.playerCount) {
+            nextIdx = (nextIdx + 1) % state.playerCount
             guard++
         }
 
-        val nextPlayer = state.players[nextIndex]
         _uiState.update {
             it.copy(
-                currentTurnIndex = nextIndex,
+                currentTurnIndex = nextIdx,
                 hasRolledThisTurn = false,
                 isRolling = false,
-                consecutiveSixes = 0,
-                statusMessage = "${nextPlayer.name}'s Turn"
+                consecutiveSixes = 0
             )
         }
-        triggerBotIfNeeded(onDiceEffect, onBonusSixEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+        triggerBotIfNeeded(onDiceEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
     }
 
     private fun triggerBotIfNeeded(
-        onDiceEffect: () -> Unit,
-        onBonusSixEffect: () -> Unit,
-        onStepEffect: (Int) -> Unit,
-        onCaptureEffect: () -> Unit,
-        onVictoryEffect: () -> Unit
+        onDiceEffect: () -> Unit = {},
+        onStepEffect: (Int) -> Unit = {},
+        onCaptureEffect: () -> Unit = {},
+        onVictoryEffect: () -> Unit = {}
     ) {
         botJob?.cancel()
         val state = _uiState.value
-        val currentPlayer = state.players.getOrNull(state.currentTurnIndex) ?: return
-        if (!currentPlayer.isBot || state.hasRolledThisTurn || state.isRolling) return
+        if (state.currentScreen != AppScreen.LUDO_GAMEPLAY || state.gameMode == GameMode.RUSH_MODE) return
+        val current = state.players.getOrNull(state.currentTurnIndex) ?: return
+        if (!current.isBot || state.hasRolledThisTurn || state.isRolling) return
 
         botJob = viewModelScope.launch(exceptionHandler) {
             delay(520)
-            rollDice(
-                onDiceEffect = onDiceEffect,
-                onBonusSixEffect = onBonusSixEffect,
-                onStepEffect = onStepEffect,
-                onCaptureEffect = onCaptureEffect,
-                onVictoryEffect = onVictoryEffect
+            rollDiceForPlayer(current.index, onDiceEffect, onStepEffect, onCaptureEffect, onVictoryEffect)
+        }
+    }
+
+    // =========================================================================
+    // SNAKES & LADDERS THEME, BOARD & GAMEPLAY ENGINE
+    // =========================================================================
+
+    fun openSnakesThemeSelector() {
+        _uiState.update { it.copy(currentScreen = AppScreen.SNAKES_THEME_SELECT) }
+    }
+
+    fun cycleSnakesTheme(delta: Int) {
+        val count = SnakesTheme.entries.size
+        _uiState.update {
+            it.copy(snakesThemeIndex = (it.snakesThemeIndex + delta + count) % count)
+        }
+    }
+
+    fun openSnakesBoardSelector() {
+        _uiState.update { it.copy(currentScreen = AppScreen.SNAKES_BOARD_SELECT) }
+    }
+
+    fun cycleSnakesBoard(delta: Int) {
+        val count = SevenSnakesBoards.size
+        _uiState.update {
+            it.copy(snakesBoardIndex = (it.snakesBoardIndex + delta + count) % count)
+        }
+    }
+
+    fun startSnakesMatch(vsComputer: Boolean) {
+        val players = listOf(
+            Player(index = 0, name = "You", colorIndex = 0, color = TenPlayerColors[0], isBot = false, snakesPosition = 1),
+            Player(index = 1, name = if (vsComputer) "Computer" else "Player 2", colorIndex = 1, color = TenPlayerColors[1], isBot = vsComputer, snakesPosition = 1)
+        )
+        _uiState.update {
+            it.copy(
+                currentScreen = AppScreen.SNAKES_GAMEPLAY,
+                players = players,
+                playerCount = 2,
+                currentTurnIndex = 0,
+                diceValue = 1,
+                isRolling = false,
+                hasRolledThisTurn = false
+            )
+        }
+    }
+
+    fun rollSnakesDice(
+        onDiceEffect: () -> Unit,
+        onStepEffect: (Int) -> Unit,
+        onSlideOrClimbEffect: () -> Unit,
+        onVictoryEffect: () -> Unit
+    ) {
+        val state = _uiState.value
+        if (state.isRolling) return
+        val playerIndex = state.currentTurnIndex
+        val player = state.players.getOrNull(playerIndex) ?: return
+        val layout = SevenSnakesBoards[state.snakesBoardIndex % SevenSnakesBoards.size]
+
+        viewModelScope.launch(exceptionHandler) {
+            onDiceEffect()
+            _uiState.update { it.copy(isRolling = true) }
+            delay(280)
+            val rolled = Random.nextInt(1, 7)
+            _uiState.update { it.copy(diceValue = rolled) }
+
+            val startPos = player.snakesPosition
+            val targetPos = startPos + rolled
+            if (targetPos <= 100) {
+                for (sq in (startPos + 1)..targetPos) {
+                    onStepEffect(sq - startPos)
+                    updateSnakesPlayerPos(playerIndex, sq)
+                    delay(85)
+                }
+
+                // Check Ladder climb or Snake bite slide
+                val finalSquare = layout.ladders[targetPos] ?: layout.snakes[targetPos] ?: targetPos
+                if (finalSquare != targetPos) {
+                    delay(220)
+                    onSlideOrClimbEffect()
+                    updateSnakesPlayerPos(playerIndex, finalSquare)
+                    delay(300)
+                }
+
+                if (finalSquare == 100) {
+                    onVictoryEffect()
+                    updateCareer { it.copy(gamesWon = it.gamesWon + 1, coins = it.coins + 300) }
+                    _uiState.update { it.copy(isRolling = false, statusMessage = "🏆 ${player.name} Reached 100!") }
+                    return@launch
+                }
+            }
+
+            val nextTurn = if (rolled == 6) playerIndex else (playerIndex + 1) % state.players.size
+            _uiState.update { it.copy(currentTurnIndex = nextTurn, isRolling = false) }
+
+            val nextPlayer = _uiState.value.players[nextTurn]
+            if (nextPlayer.isBot) {
+                delay(550)
+                rollSnakesDice(onDiceEffect, onStepEffect, onSlideOrClimbEffect, onVictoryEffect)
+            }
+        }
+    }
+
+    private fun updateSnakesPlayerPos(playerIndex: Int, square: Int) {
+        _uiState.update { s ->
+            s.copy(
+                players = s.players.map { if (it.index == playerIndex) it.copy(snakesPosition = square) else it }
             )
         }
     }

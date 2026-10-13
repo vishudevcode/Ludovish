@@ -16,17 +16,10 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
-import com.ludovish.app.domain.GameUiState
-import com.ludovish.app.domain.Player
-import com.ludovish.app.domain.Token
-import com.ludovish.app.domain.TokenStyle
-import com.ludovish.app.ui.theme.liquidGlassPanel
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.hypot
-import kotlin.math.sin
+import com.ludovish.app.domain.*
+import kotlin.math.*
 
-private data class RenderedTokenHitBox(
+private data class TokenHitBox(
     val playerIndex: Int,
     val tokenId: Int,
     val center: Offset,
@@ -36,324 +29,401 @@ private data class RenderedTokenHitBox(
 @Composable
 fun LudovishBoardCanvas(
     state: GameUiState,
-    onTokenTapped: (Int) -> Unit,
+    onTokenTapped: (Int, Int) -> Unit,
+    onCenterDiceTapped: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "token_pulse")
+    val infiniteTransition = rememberInfiniteTransition(label = "board_pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1.0f,
-        targetValue = 1.28f,
+        targetValue = 1.25f,
         animationSpec = infiniteRepeatable(
-            animation = tween(540, easing = FastOutSlowInEasing),
+            animation = tween(480, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulse"
     )
 
-    val hitBoxes = remember { mutableStateListOf<RenderedTokenHitBox>() }
+    val hitBoxes = remember { mutableStateListOf<TokenHitBox>() }
 
     Canvas(
         modifier = modifier
             .fillMaxWidth()
             .aspectRatio(1f)
-            .padding(8.dp)
-            .liquidGlassPanel(
-                glassAmount = state.glassValue,
-                accentColor = state.activeAccentColor,
-                cornerRadius = 32.dp
-            )
-            .padding(12.dp)
-            .pointerInput(state.currentTurnIndex, state.hasRolledThisTurn, state.diceValue, state.players, state.gameMode) {
-                detectTapGestures { tapOffset ->
-                    if (!state.hasRolledThisTurn || state.isRolling) return@detectTapGestures
+            .padding(6.dp)
+            .pointerInput(state.players, state.currentTurnIndex, state.hasRolledThisTurn, state.gameMode) {
+                detectTapGestures { tap ->
+                    // In 5-10P mode, tapping the center polygon rolls the dice!
+                    if (state.playerCount >= 5) {
+                        val center = Offset(size.width / 2f, size.height / 2f)
+                        if (hypot(tap.x - center.x, tap.y - center.y) <= size.minDimension * 0.14f) {
+                            onCenterDiceTapped()
+                            return@detectTapGestures
+                        }
+                    }
+
                     val tapped = hitBoxes.firstOrNull { box ->
-                        hypot(tapOffset.x - box.center.x, tapOffset.y - box.center.y) <= box.radius * 1.75f
+                        hypot(tap.x - box.center.x, tap.y - box.center.y) <= box.radius * 1.85f
                     }
                     if (tapped != null) {
-                        onTokenTapped(tapped.tokenId)
+                        onTokenTapped(tapped.playerIndex, tapped.tokenId)
                     }
                 }
             }
     ) {
         hitBoxes.clear()
         if (state.playerCount <= 4) {
-            drawClassicFourArmBoard(
+            drawAuthenticFourPlayerBoard(
                 state = state,
                 pulseScale = pulseScale,
-                onRegisterHitBox = { hitBoxes.add(it) }
+                onRegisterHit = { hitBoxes.add(it) }
             )
         } else {
-            drawRadialMultiPlayerArena(
+            drawPolygonalMultiPlayerBoard(
                 state = state,
                 pulseScale = pulseScale,
-                onRegisterHitBox = { hitBoxes.add(it) }
+                onRegisterHit = { hitBoxes.add(it) }
             )
         }
     }
 }
 
-private fun DrawScope.drawClassicFourArmBoard(
+private fun DrawScope.drawAuthenticFourPlayerBoard(
     state: GameUiState,
     pulseScale: Float,
-    onRegisterHitBox: (RenderedTokenHitBox) -> Unit
+    onRegisterHit: (TokenHitBox) -> Unit
 ) {
     val gridSize = 15
     val cell = size.width / gridSize
 
+    // White Ludo King board background
+    drawRoundRect(
+        color = Color.White,
+        topLeft = Offset.Zero,
+        size = size,
+        cornerRadius = CornerRadius(12f, 12f)
+    )
+
+    // Standard Ludo King corner colors: Bottom-Left = Blue(P0), Top-Left = Red(P1), Top-Right = Green(P2), Bottom-Right = Yellow(P3)
+    val cBlue = state.players.getOrNull(0)?.color ?: TenPlayerColors[0]
+    val cRed = state.players.getOrNull(1)?.color ?: TenPlayerColors[1]
+    val cGreen = state.players.getOrNull(2)?.color ?: TenPlayerColors[2]
+    val cYellow = state.players.getOrNull(3)?.color ?: TenPlayerColors[3]
+
+    // 1. Colored Home Stretches & Starting Squares
+    for (i in 1..5) {
+        drawRect(color = cBlue, topLeft = Offset(7 * cell, (14 - i) * cell), size = Size(cell, cell))
+        drawRect(color = cRed, topLeft = Offset(i * cell, 7 * cell), size = Size(cell, cell))
+        drawRect(color = cGreen, topLeft = Offset(7 * cell, i * cell), size = Size(cell, cell))
+        drawRect(color = cYellow, topLeft = Offset((14 - i) * cell, 7 * cell), size = Size(cell, cell))
+    }
+    drawRect(color = cBlue, topLeft = Offset(6 * cell, 13 * cell), size = Size(cell, cell))
+    drawRect(color = cRed, topLeft = Offset(1 * cell, 6 * cell), size = Size(cell, cell))
+    drawRect(color = cGreen, topLeft = Offset(8 * cell, 1 * cell), size = Size(cell, cell))
+    drawRect(color = cYellow, topLeft = Offset(13 * cell, 8 * cell), size = Size(cell, cell))
+
+    // 2. Grid lines on track cells
     for (r in 0 until gridSize) {
         for (c in 0 until gridSize) {
             val isTrack = (r in 6..8) || (c in 6..8)
             val isCenter = (r in 6..8) && (c in 6..8)
             if (isTrack && !isCenter) {
-                drawRoundRect(
-                    color = Color.White.copy(alpha = 0.08f + state.glassValue * 0.10f),
-                    topLeft = Offset(c * cell + 1.5f, r * cell + 1.5f),
-                    size = Size(cell - 3f, cell - 3f),
-                    cornerRadius = CornerRadius(6f, 6f)
+                drawRect(
+                    color = Color(0xFF1E293B),
+                    topLeft = Offset(c * cell, r * cell),
+                    size = Size(cell, cell),
+                    style = Stroke(width = 1.4f)
                 )
             }
         }
     }
 
-    val cornerColors = listOf(
-        state.players.getOrNull(0)?.color ?: Color(0xFFFF3B5C),
-        state.players.getOrNull(1)?.color ?: Color(0xFF00E575),
-        state.players.getOrNull(2)?.color ?: Color(0xFFFFD60A),
-        state.players.getOrNull(3)?.color ?: Color(0xFF0A84FF)
+    // 3. Safe Stars
+    val starSquares = listOf(
+        6 to 13, 2 to 8, 1 to 6, 6 to 2,
+        8 to 1, 12 to 6, 13 to 8, 8 to 12
     )
-
-    for (i in 1..5) {
-        drawColoredCell(i, 7, cell, cornerColors[0])
-        drawColoredCell(7, i, cell, cornerColors[1])
-        drawColoredCell(14 - i, 7, cell, cornerColors[2])
-        drawColoredCell(7, 14 - i, cell, cornerColors[3])
-    }
-    drawColoredCell(1, 6, cell, cornerColors[0])
-    drawColoredCell(8, 1, cell, cornerColors[1])
-    drawColoredCell(13, 8, cell, cornerColors[2])
-    drawColoredCell(6, 13, cell, cornerColors[3])
-
-    val starCells = listOf(
-        1 to 6, 6 to 2, 8 to 1, 12 to 6,
-        13 to 8, 8 to 12, 6 to 13, 2 to 8
-    )
-    starCells.forEach { (col, row) ->
-        drawStarEmblem(
+    starSquares.forEach { (col, row) ->
+        drawStarOutline(
             center = Offset((col + 0.5f) * cell, (row + 0.5f) * cell),
-            radius = cell * 0.28f,
-            color = Color.White.copy(alpha = 0.55f)
+            radius = cell * 0.34f,
+            color = Color(0xFF334155)
         )
     }
 
-    val baseOrigins = listOf(0 to 0, 9 to 0, 9 to 9, 0 to 9)
-    baseOrigins.forEachIndexed { idx, (col, row) ->
-        val pColor = cornerColors[idx]
-        val activePlayerExists = idx < state.playerCount
-        val topLeft = Offset(col * cell + 4f, row * cell + 4f)
-        val boxSize = Size(cell * 6 - 8f, cell * 6 - 8f)
-
-        drawRoundRect(
-            brush = Brush.linearGradient(
-                colors = listOf(
-                    pColor.copy(alpha = if (activePlayerExists) 0.36f else 0.10f),
-                    pColor.copy(alpha = if (activePlayerExists) 0.14f else 0.04f)
-                ),
-                start = topLeft,
-                end = Offset(topLeft.x + boxSize.width, topLeft.y + boxSize.height)
-            ),
-            topLeft = topLeft,
-            size = boxSize,
-            cornerRadius = CornerRadius(28f, 28f)
-        )
-        drawRoundRect(
-            color = pColor.copy(alpha = if (idx == state.currentTurnIndex) 0.95f else 0.45f),
-            topLeft = topLeft,
-            size = boxSize,
-            cornerRadius = CornerRadius(28f, 28f),
-            style = Stroke(width = if (idx == state.currentTurnIndex) 5f else 2f)
-        )
-    }
-
-    val centerTopLeft = Offset(6 * cell, 6 * cell)
-    val centerSize = Size(3 * cell, 3 * cell)
-    drawRoundRect(
-        brush = Brush.radialGradient(
-            colors = listOf(state.activeAccentColor.copy(alpha = 0.55f), Color.White.copy(alpha = 0.12f)),
-            center = Offset(size.width / 2f, size.height / 2f),
-            radius = cell * 2.2f
-        ),
-        topLeft = centerTopLeft,
-        size = centerSize,
-        cornerRadius = CornerRadius(18f, 18f)
+    // 4. Four Corner Home Yards (with inner white box & 4 colored circles like video)
+    val corners = listOf(
+        Triple(0, 9, cBlue),   // Bottom-Left (P1)
+        Triple(0, 0, cRed),    // Top-Left (P2)
+        Triple(9, 0, cGreen),  // Top-Right (P3)
+        Triple(9, 9, cYellow)  // Bottom-Right (P4)
     )
+    corners.forEachIndexed { idx, (col, row, color) ->
+        val topLeft = Offset(col * cell, row * cell)
+        val yardSize = Size(6 * cell, 6 * cell)
+        drawRect(color = color, topLeft = topLeft, size = yardSize)
+        drawRect(color = Color.Black, topLeft = topLeft, size = yardSize, style = Stroke(width = 2f))
 
-    val perimeterCoords = buildClassic52Perimeter()
-    state.players.forEach { player ->
-        player.tokens.forEach { token ->
-            val tokenCenter = computeClassicTokenOffset(
-                player = player,
-                token = token,
-                cell = cell,
-                perimeter = perimeterCoords
-            )
-            val isMovable = player.index == state.currentTurnIndex &&
-                state.hasRolledThisTurn &&
-                !state.isRolling &&
-                token.canMove(state.diceValue, state.gameMode, player.hasCapturedEnemy)
+        val innerPad = cell * 0.85f
+        val innerTopLeft = Offset(topLeft.x + innerPad, topLeft.y + innerPad)
+        val innerSize = Size(6 * cell - innerPad * 2f, 6 * cell - innerPad * 2f)
+        drawRoundRect(
+            color = Color.White,
+            topLeft = innerTopLeft,
+            size = innerSize,
+            cornerRadius = CornerRadius(18f, 18f)
+        )
 
-            val radius = cell * 0.38f
-            drawStyledToken(
-                style = state.tokenStyle,
-                center = tokenCenter,
-                radius = radius,
-                color = player.color,
-                isMovable = isMovable,
-                pulseScale = pulseScale
+        val circleOffsets = listOf(1.9f to 1.9f, 4.1f to 1.9f, 1.9f to 4.1f, 4.1f to 4.1f)
+        circleOffsets.forEach { (dc, dr) ->
+            drawCircle(
+                color = color,
+                radius = cell * 0.56f,
+                center = Offset((col + dc) * cell, (row + dr) * cell)
             )
-            if (isMovable) {
-                onRegisterHitBox(RenderedTokenHitBox(player.index, token.id, tokenCenter, radius))
-            }
         }
-    }
-}
 
-private fun DrawScope.drawRadialMultiPlayerArena(
-    state: GameUiState,
-    pulseScale: Float,
-    onRegisterHitBox: (RenderedTokenHitBox) -> Unit
-) {
-    val n = state.playerCount
-    val center = Offset(size.width / 2f, size.height / 2f)
-    val maxRadius = size.minDimension / 2f
-    val ringRadius = maxRadius * 0.64f
-    val yardRadius = maxRadius * 0.87f
-    val crownRadius = maxRadius * 0.17f
-
-    val totalTrackNodes = 52
-    for (i in 0 until totalTrackNodes) {
-        val angle = (2.0 * PI * i / totalTrackNodes) - (PI / 2.0)
-        val nodeCenter = Offset(
-            x = center.x + (ringRadius * cos(angle)).toFloat(),
-            y = center.y + (ringRadius * sin(angle)).toFloat()
-        )
-        val isSafe = i % 6 == 0
-        drawCircle(
-            color = if (isSafe) Color.White.copy(alpha = 0.34f) else Color.White.copy(alpha = 0.12f),
-            radius = maxRadius * 0.036f,
-            center = nodeCenter
-        )
-    }
-
-    state.players.forEach { player ->
-        val sectorAngle = (2.0 * PI * player.index / n) - (PI / 2.0)
-        val isCurrentTurn = player.index == state.currentTurnIndex
-
-        for (step in 1..5) {
-            val r = ringRadius - (step / 6f) * (ringRadius - crownRadius)
-            val stepOffset = Offset(
-                x = center.x + (r * cos(sectorAngle)).toFloat(),
-                y = center.y + (r * sin(sectorAngle)).toFloat()
+        // Team A / Team B badges in corners when Team Up is active (matches video 02:10)
+        if (state.gameMode == GameMode.TEAM_UP) {
+            val badgeCenter = when (idx) {
+                0 -> Offset(5.4f * cell, 9.6f * cell)
+                1 -> Offset(5.4f * cell, 5.4f * cell)
+                2 -> Offset(9.6f * cell, 5.4f * cell)
+                else -> Offset(9.6f * cell, 9.6f * cell)
+            }
+            drawCircle(
+                color = if (idx % 2 == 0) Color(0xFF0088FF) else Color(0xFFE6192E),
+                radius = cell * 0.42f,
+                center = badgeCenter
             )
             drawCircle(
-                color = player.color.copy(alpha = 0.55f),
-                radius = maxRadius * 0.032f,
-                center = stepOffset
+                color = Color.White,
+                radius = cell * 0.42f,
+                center = badgeCenter,
+                style = Stroke(width = 2.5f)
             )
-        }
-
-        val yardCenter = Offset(
-            x = center.x + (yardRadius * cos(sectorAngle)).toFloat(),
-            y = center.y + (yardRadius * sin(sectorAngle)).toFloat()
-        )
-        val podRadius = maxRadius * 0.115f
-        drawCircle(
-            color = player.color.copy(alpha = if (isCurrentTurn) 0.42f else 0.20f),
-            radius = podRadius,
-            center = yardCenter
-        )
-        drawCircle(
-            color = player.color.copy(alpha = if (isCurrentTurn) 1f else 0.55f),
-            radius = podRadius,
-            center = yardCenter,
-            style = Stroke(width = if (isCurrentTurn) 5f else 2f)
-        )
-
-        player.tokens.forEach { token ->
-            val tokenOffset = when {
-                token.isInBase -> {
-                    val subAngle = (PI / 2.0) * token.id + (PI / 4.0)
-                    Offset(
-                        x = yardCenter.x + (podRadius * 0.48f * cos(subAngle)).toFloat(),
-                        y = yardCenter.y + (podRadius * 0.48f * sin(subAngle)).toFloat()
-                    )
-                }
-                token.isFinished -> {
-                    val finishAngle = sectorAngle + (token.id - 1.5) * 0.14
-                    Offset(
-                        x = center.x + (crownRadius * 0.48f * cos(finishAngle)).toFloat(),
-                        y = center.y + (crownRadius * 0.48f * sin(finishAngle)).toFloat()
-                    )
-                }
-                token.isInHomeStretch -> {
-                    val stretchStep = token.progress - 50
-                    val r = ringRadius - (stretchStep / 6f) * (ringRadius - crownRadius)
-                    Offset(
-                        x = center.x + (r * cos(sectorAngle)).toFloat(),
-                        y = center.y + (r * sin(sectorAngle)).toFloat()
-                    )
-                }
-                else -> {
-                    val startSlot = (player.index * (totalTrackNodes / n)) % totalTrackNodes
-                    val globalSlot = (startSlot + token.progress) % totalTrackNodes
-                    val angle = (2.0 * PI * globalSlot / totalTrackNodes) - (PI / 2.0)
-                    Offset(
-                        x = center.x + (ringRadius * cos(angle)).toFloat(),
-                        y = center.y + (ringRadius * sin(angle)).toFloat()
-                    )
-                }
-            }
-
-            val isMovable = isCurrentTurn &&
-                state.hasRolledThisTurn &&
-                !state.isRolling &&
-                token.canMove(state.diceValue, state.gameMode, player.hasCapturedEnemy)
-
-            val tokenRadius = maxRadius * 0.042f
-            drawStyledToken(
-                style = state.tokenStyle,
-                center = tokenOffset,
-                radius = tokenRadius,
-                color = player.color,
-                isMovable = isMovable,
-                pulseScale = pulseScale
-            )
-            if (isMovable) {
-                onRegisterHitBox(RenderedTokenHitBox(player.index, token.id, tokenOffset, tokenRadius))
-            }
         }
     }
 
-    drawCircle(
-        brush = Brush.radialGradient(
-            colors = listOf(state.activeAccentColor.copy(alpha = 0.75f), Color.White.copy(alpha = 0.15f)),
-            center = center,
-            radius = crownRadius
-        ),
-        radius = crownRadius,
-        center = center
-    )
-    drawCircle(
-        color = Color.White.copy(alpha = 0.7f),
-        radius = crownRadius,
-        center = center,
-        style = Stroke(width = 3f)
-    )
+    // 5. Center 4-Triangle Crown
+    val cx = 7.5f * cell
+    val cy = 7.5f * cell
+    val cLeft = 6f * cell
+    val cRight = 9f * cell
+    val cTop = 6f * cell
+    val cBottom = 9f * cell
+
+    val triBottom = Path().apply { moveTo(cLeft, cBottom); lineTo(cRight, cBottom); lineTo(cx, cy); close() }
+    val triLeft = Path().apply { moveTo(cLeft, cTop); lineTo(cLeft, cBottom); lineTo(cx, cy); close() }
+    val triTop = Path().apply { moveTo(cLeft, cTop); lineTo(cRight, cTop); lineTo(cx, cy); close() }
+    val triRight = Path().apply { moveTo(cRight, cTop); lineTo(cRight, cBottom); lineTo(cx, cy); close() }
+
+    drawPath(triBottom, color = cBlue)
+    drawPath(triLeft, color = cRed)
+    drawPath(triTop, color = cGreen)
+    drawPath(triRight, color = cYellow)
+    drawRect(color = Color.Black, topLeft = Offset(cLeft, cTop), size = Size(3 * cell, 3 * cell), style = Stroke(width = 2f))
+
+    // 6. Render Tokens
+    val perimeter = buildAuthentic52Track()
+    state.players.forEach { player ->
+        player.tokens.forEach { token ->
+            val pos = computeFourPlayerTokenOffset(player.index, token, cell, perimeter)
+            val canMove = (state.gameMode == GameMode.RUSH_MODE || (player.index == state.currentTurnIndex && state.hasRolledThisTurn && !state.isRolling)) &&
+                token.canMove(if (state.gameMode == GameMode.RUSH_MODE) player.diceValue else state.diceValue)
+
+            val r = cell * 0.40f
+            drawLudoKingPawn(
+                style = state.tokenStyle,
+                center = pos,
+                radius = r,
+                color = player.color,
+                isMovable = canMove,
+                pulseScale = pulseScale
+            )
+            if (canMove) {
+                onRegisterHit(TokenHitBox(player.index, token.id, pos, r))
+            }
+        }
+    }
 }
 
 /**
- * Renders all 6 custom Ludo King Pawn/Token styles with specular Liquid Glass highlights
+ * Renders the true Pentagon (5P), Hexagon (6P), Heptagon (7P), Octagon (8P), Nonagon (9P), and Decagon (10P)
+ * geometric boards exactly like Ludo King 5P/6P in Video 2 (01:20 - 01:55)
  */
-private fun DrawScope.drawStyledToken(
+private fun DrawScope.drawPolygonalMultiPlayerBoard(
+    state: GameUiState,
+    pulseScale: Float,
+    onRegisterHit: (TokenHitBox) -> Unit
+) {
+    val n = state.playerCount.coerceIn(5, 10)
+    val center = Offset(size.width / 2f, size.height / 2f)
+    val outerR = size.minDimension * 0.485f
+    val innerR = size.minDimension * 0.135f
+    val sectorAngle = (2.0 * PI / n)
+    val startBaseAngle = (PI / 2.0) - (sectorAngle / 2.0)
+
+    // 1. Draw N Outer Polygon Sectors (Triangular Home Yards + 3-Column Radial Arms)
+    for (i in 0 until n) {
+        val player = state.players.getOrNull(i)
+        val pColor = player?.color ?: TenPlayerColors[i % TenPlayerColors.size]
+        val a1 = startBaseAngle + i * sectorAngle
+        val a2 = a1 + sectorAngle
+        val aMid = (a1 + a2) / 2.0
+
+        val v1 = Offset(center.x + (outerR * cos(a1)).toFloat(), center.y + (outerR * sin(a1)).toFloat())
+        val v2 = Offset(center.x + (outerR * cos(a2)).toFloat(), center.y + (outerR * sin(a2)).toFloat())
+        val c1 = Offset(center.x + (innerR * cos(a1)).toFloat(), center.y + (innerR * sin(a1)).toFloat())
+        val c2 = Offset(center.x + (innerR * cos(a2)).toFloat(), center.y + (innerR * sin(a2)).toFloat())
+
+        // Colored Triangular Home Base on Left half of sector
+        val edgeMid = Offset((v1.x + v2.x) / 2f, (v1.y + v2.y) / 2f)
+        val innerMid = Offset((c1.x + c2.x) / 2f, (c1.y + c2.y) / 2f)
+
+        val yardPath = Path().apply {
+            moveTo(v1.x, v1.y)
+            lineTo(edgeMid.x, edgeMid.y)
+            lineTo(innerMid.x, innerMid.y)
+            lineTo(c1.x, c1.y)
+            close()
+        }
+        drawPath(yardPath, color = pColor)
+        drawPath(yardPath, color = Color.Black, style = Stroke(width = 2.5f))
+
+        // White inner triangle inside yard for the 4 tokens
+        val yardCenter = Offset(
+            (v1.x + edgeMid.x + innerMid.x + c1.x) / 4f,
+            (v1.y + edgeMid.y + innerMid.y + c1.y) / 4f
+        )
+        drawCircle(color = Color.White, radius = outerR * 0.14f, center = yardCenter)
+        drawCircle(color = Color.Black, radius = outerR * 0.14f, center = yardCenter, style = Stroke(width = 1.8f))
+
+        // Radial 3-Column Track Arm on Right half of sector
+        val trackPath = Path().apply {
+            moveTo(edgeMid.x, edgeMid.y)
+            lineTo(v2.x, v2.y)
+            lineTo(c2.x, c2.y)
+            lineTo(innerMid.x, innerMid.y)
+            close()
+        }
+        drawPath(trackPath, color = Color.White)
+        drawPath(trackPath, color = Color.Black, style = Stroke(width = 2f))
+
+        // Colored Center Home Stretch inside the Radial Arm
+        for (step in 1..5) {
+            val t = step / 6f
+            val rStep = outerR * (1f - t) + innerR * t
+            val stretchAngle = aMid + sectorAngle * 0.22
+            val pos = Offset(
+                center.x + (rStep * cos(stretchAngle)).toFloat(),
+                center.y + (rStep * sin(stretchAngle)).toFloat()
+            )
+            drawCircle(color = pColor, radius = outerR * 0.042f, center = pos)
+        }
+
+        // Render Player's 4 Tokens
+        player?.tokens?.forEach { token ->
+            val tokenPos = when {
+                token.isInBase -> {
+                    val subA = (PI / 2.0) * token.id
+                    Offset(
+                        yardCenter.x + (outerR * 0.068f * cos(subA)).toFloat(),
+                        yardCenter.y + (outerR * 0.068f * sin(subA)).toFloat()
+                    )
+                }
+                token.isFinished -> {
+                    Offset(
+                        center.x + (innerR * 0.5f * cos(aMid)).toFloat(),
+                        center.y + (innerR * 0.5f * sin(aMid)).toFloat()
+                    )
+                }
+                token.isInHomeStretch -> {
+                    val st = (token.progress - 50) / 6f
+                    val rStep = outerR * (1f - st) + innerR * st
+                    val stretchAngle = aMid + sectorAngle * 0.22
+                    Offset(
+                        center.x + (rStep * cos(stretchAngle)).toFloat(),
+                        center.y + (rStep * sin(stretchAngle)).toFloat()
+                    )
+                }
+                else -> {
+                    val totalRing = 52
+                    val startSlot = (player.index * (totalRing / n)) % totalRing
+                    val globalSlot = (startSlot + token.progress) % totalRing
+                    val ringAngle = startBaseAngle + (2.0 * PI * globalSlot / totalRing)
+                    val trackR = outerR * 0.62f
+                    Offset(
+                        center.x + (trackR * cos(ringAngle)).toFloat(),
+                        center.y + (trackR * sin(ringAngle)).toFloat()
+                    )
+                }
+            }
+
+            val canMove = player.index == state.currentTurnIndex &&
+                state.hasRolledThisTurn &&
+                !state.isRolling &&
+                token.canMove(state.diceValue)
+
+            val tokR = outerR * 0.048f
+            drawLudoKingPawn(
+                style = state.tokenStyle,
+                center = tokenPos,
+                radius = tokR,
+                color = pColor,
+                isMovable = canMove,
+                pulseScale = pulseScale
+            )
+            if (canMove) {
+                onRegisterHit(TokenHitBox(player.index, token.id, tokenPos, tokR))
+            }
+        }
+    }
+
+    // 2. Central Polygon Crown + Center 3D Dice Box (matches 5P/6P video 01:23 & 01:42)
+    val centerPoly = Path().apply {
+        for (i in 0 until n) {
+            val a = startBaseAngle + i * sectorAngle
+            val px = center.x + (innerR * cos(a)).toFloat()
+            val py = center.y + (innerR * sin(a)).toFloat()
+            if (i == 0) moveTo(px, py) else lineTo(px, py)
+        }
+        close()
+    }
+    val activeColor = state.players.getOrNull(state.currentTurnIndex)?.color ?: Color.White
+    drawPath(centerPoly, color = Color(0xFF0A192F))
+    drawPath(centerPoly, color = Color.White, style = Stroke(width = 3f))
+
+    // Draw Center Dice in 5P-10P mode
+    val diceBoxSize = innerR * 1.15f
+    drawRoundRect(
+        color = activeColor,
+        topLeft = Offset(center.x - diceBoxSize / 2f, center.y - diceBoxSize / 2f),
+        size = Size(diceBoxSize, diceBoxSize),
+        cornerRadius = CornerRadius(14f, 14f)
+    )
+    drawRoundRect(
+        color = Color.White,
+        topLeft = Offset(center.x - diceBoxSize / 2f, center.y - diceBoxSize / 2f),
+        size = Size(diceBoxSize, diceBoxSize),
+        cornerRadius = CornerRadius(14f, 14f),
+        style = Stroke(width = 2.5f)
+    )
+
+    // Pips on center dice
+    val pipR = diceBoxSize * 0.09f
+    drawCircle(color = Color.White, radius = pipR, center = center)
+    if (state.diceValue >= 2) {
+        drawCircle(color = Color.White, radius = pipR, center = Offset(center.x - diceBoxSize * 0.25f, center.y - diceBoxSize * 0.25f))
+        drawCircle(color = Color.White, radius = pipR, center = Offset(center.x + diceBoxSize * 0.25f, center.y + diceBoxSize * 0.25f))
+    }
+    if (state.diceValue >= 4) {
+        drawCircle(color = Color.White, radius = pipR, center = Offset(center.x + diceBoxSize * 0.25f, center.y - diceBoxSize * 0.25f))
+        drawCircle(color = Color.White, radius = pipR, center = Offset(center.x - diceBoxSize * 0.25f, center.y + diceBoxSize * 0.25f))
+    }
+}
+
+private fun DrawScope.drawLudoKingPawn(
     style: TokenStyle,
     center: Offset,
     radius: Float,
@@ -365,148 +435,59 @@ private fun DrawScope.drawStyledToken(
 
     if (isMovable) {
         drawCircle(
-            color = Color.White.copy(alpha = 0.65f),
-            radius = r * 1.48f,
+            color = Color(0xFFFFD60A),
+            radius = r * 1.38f,
             center = center,
-            style = Stroke(width = 4.5f)
+            style = Stroke(width = 4f)
         )
     }
 
     when (style) {
-        TokenStyle.CLASSIC_PIN -> {
-            // Classic Ludo King 3D Teardrop Pawn Pin
-            drawCircle(
-                color = Color.Black.copy(alpha = 0.35f),
-                radius = r * 0.9f,
-                center = Offset(center.x, center.y + r * 0.25f)
-            )
-            val pinPath = Path().apply {
-                moveTo(center.x, center.y - r * 1.25f)
+        TokenStyle.LOCATION_PIN -> {
+            val pin = Path().apply {
+                moveTo(center.x, center.y + r * 0.95f)
                 cubicTo(
-                    center.x + r * 1.15f, center.y - r * 0.4f,
-                    center.x + r * 0.95f, center.y + r * 0.85f,
-                    center.x, center.y + r * 0.95f
-                )
-                cubicTo(
-                    center.x - r * 0.95f, center.y + r * 0.85f,
-                    center.x - r * 1.15f, center.y - r * 0.4f,
+                    center.x - r * 1.15f, center.y - r * 0.1f,
+                    center.x - r * 0.95f, center.y - r * 1.25f,
                     center.x, center.y - r * 1.25f
                 )
+                cubicTo(
+                    center.x + r * 0.95f, center.y - r * 1.25f,
+                    center.x + r * 1.15f, center.y - r * 0.1f,
+                    center.x, center.y + r * 0.95f
+                )
                 close()
             }
-            drawPath(
-                path = pinPath,
-                brush = Brush.linearGradient(
-                    colors = listOf(Color.White, color, color.copy(alpha = 0.85f)),
-                    start = Offset(center.x - r, center.y - r),
-                    end = Offset(center.x + r, center.y + r)
-                )
-            )
-            drawPath(path = pinPath, color = Color.White, style = Stroke(width = 2.4f))
-            drawCircle(
-                color = Color.White.copy(alpha = 0.85f),
-                radius = r * 0.32f,
-                center = Offset(center.x, center.y - r * 0.35f)
-            )
+            drawPath(pin, color = color)
+            drawPath(pin, color = Color.White, style = Stroke(width = 2.6f))
+            drawCircle(color = Color.White, radius = r * 0.36f, center = Offset(center.x, center.y - r * 0.42f))
         }
-
-        TokenStyle.LIQUID_ORB -> {
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(Color.White, color, color.copy(alpha = 0.85f)),
-                    center = Offset(center.x - r * 0.3f, center.y - r * 0.3f),
-                    radius = r * 1.3f
-                ),
-                radius = r,
-                center = center
-            )
-            drawCircle(
-                color = Color.White.copy(alpha = 0.9f),
-                radius = r,
-                center = center,
-                style = Stroke(width = 2.2f)
-            )
-        }
-
-        TokenStyle.ROYAL_CROWN -> {
+        else -> {
             drawCircle(color = color, radius = r, center = center)
-            val crown = Path().apply {
-                moveTo(center.x - r * 0.65f, center.y + r * 0.45f)
-                lineTo(center.x - r * 0.75f, center.y - r * 0.35f)
-                lineTo(center.x - r * 0.30f, center.y + r * 0.05f)
-                lineTo(center.x, center.y - r * 0.55f)
-                lineTo(center.x + r * 0.30f, center.y + r * 0.05f)
-                lineTo(center.x + r * 0.75f, center.y - r * 0.35f)
-                lineTo(center.x + r * 0.65f, center.y + r * 0.45f)
-                close()
-            }
-            drawPath(crown, color = Color(0xFFFFD60A))
-            drawCircle(color = Color.White, radius = r, center = center, style = Stroke(width = 2.4f))
-        }
-
-        TokenStyle.CYBER_HEX -> {
-            val hex = Path().apply {
-                for (i in 0 until 6) {
-                    val a = (PI / 3.0) * i - (PI / 6.0)
-                    val px = center.x + (r * 1.08f * cos(a)).toFloat()
-                    val py = center.y + (r * 1.08f * sin(a)).toFloat()
-                    if (i == 0) moveTo(px, py) else lineTo(px, py)
-                }
-                close()
-            }
-            drawPath(hex, color = color)
-            drawPath(hex, color = Color.White, style = Stroke(width = 2.5f))
-        }
-
-        TokenStyle.DIAMOND_GEM -> {
-            val diamond = Path().apply {
-                moveTo(center.x, center.y - r * 1.18f)
-                lineTo(center.x + r * 1.08f, center.y)
-                lineTo(center.x, center.y + r * 1.18f)
-                lineTo(center.x - r * 1.08f, center.y)
-                close()
-            }
-            drawPath(
-                path = diamond,
-                brush = Brush.linearGradient(
-                    colors = listOf(Color.White, color, Color.Black.copy(alpha = 0.5f))
-                )
-            )
-            drawPath(diamond, color = Color.White, style = Stroke(width = 2.4f))
-        }
-
-        TokenStyle.STAR_SHIELD -> {
-            drawCircle(color = color.copy(alpha = 0.9f), radius = r, center = center)
-            drawStarEmblem(center = center, radius = r * 0.85f, color = Color.White)
-            drawCircle(color = Color.White, radius = r, center = center, style = Stroke(width = 2.2f))
+            drawCircle(color = Color.White, radius = r, center = center, style = Stroke(width = 2.6f))
+            drawStarOutline(center = center, radius = r * 0.55f, color = Color.White)
         }
     }
 }
 
-private fun DrawScope.drawStarEmblem(center: Offset, radius: Float, color: Color) {
-    val star = Path().apply {
+private fun DrawScope.drawStarOutline(center: Offset, radius: Float, color: Color) {
+    val path = Path().apply {
         for (i in 0 until 10) {
-            val r = if (i % 2 == 0) radius else radius * 0.45f
+            val rad = if (i % 2 == 0) radius else radius * 0.42f
             val a = (PI / 5.0) * i - (PI / 2.0)
-            val px = center.x + (r * cos(a)).toFloat()
-            val py = center.y + (r * sin(a)).toFloat()
+            val px = center.x + (rad * cos(a)).toFloat()
+            val py = center.y + (rad * sin(a)).toFloat()
             if (i == 0) moveTo(px, py) else lineTo(px, py)
         }
         close()
     }
-    drawPath(star, color = color)
+    drawPath(path, color = color, style = Stroke(width = 2f))
 }
 
-private fun DrawScope.drawColoredCell(col: Int, row: Int, cell: Float, color: Color) {
-    drawRoundRect(
-        color = color.copy(alpha = 0.42f),
-        topLeft = Offset(col * cell + 2f, row * cell + 2f),
-        size = Size(cell - 4f, cell - 4f),
-        cornerRadius = CornerRadius(7f, 7f)
-    )
-}
-
-private fun buildClassic52Perimeter(): List<Pair<Int, Int>> = listOf(
+private fun buildAuthentic52Track(): List<Pair<Int, Int>> = listOf(
+    6 to 13, 6 to 12, 6 to 11, 6 to 10, 6 to 9,
+    5 to 8, 4 to 8, 3 to 8, 2 to 8, 1 to 8, 0 to 8,
+    0 to 7, 0 to 6,
     1 to 6, 2 to 6, 3 to 6, 4 to 6, 5 to 6,
     6 to 5, 6 to 4, 6 to 3, 6 to 2, 6 to 1, 6 to 0,
     7 to 0, 8 to 0,
@@ -515,25 +496,22 @@ private fun buildClassic52Perimeter(): List<Pair<Int, Int>> = listOf(
     14 to 7, 14 to 8,
     13 to 8, 12 to 8, 11 to 8, 10 to 8, 9 to 8,
     8 to 9, 8 to 10, 8 to 11, 8 to 12, 8 to 13, 8 to 14,
-    7 to 14, 6 to 14,
-    6 to 13, 6 to 12, 6 to 11, 6 to 10, 6 to 9,
-    5 to 8, 4 to 8, 3 to 8, 2 to 8, 1 to 8, 0 to 8,
-    0 to 7, 0 to 6
+    7 to 14, 6 to 14
 )
 
-private fun computeClassicTokenOffset(
-    player: Player,
+private fun computeFourPlayerTokenOffset(
+    playerIndex: Int,
     token: Token,
     cell: Float,
     perimeter: List<Pair<Int, Int>>
 ): Offset {
-    val idx = player.index % 4
+    val idx = playerIndex % 4
     if (token.isInBase) {
-        val baseOrigins = listOf(0 to 0, 9 to 0, 9 to 9, 0 to 9)
-        val (baseCol, baseRow) = baseOrigins[idx]
-        val slotOffsets = listOf(1.8f to 1.8f, 4.2f to 1.8f, 1.8f to 4.2f, 4.2f to 4.2f)
-        val (dc, dr) = slotOffsets[token.id % 4]
-        return Offset((baseCol + dc) * cell, (baseRow + dr) * cell)
+        val corners = listOf(0 to 9, 0 to 0, 9 to 0, 9 to 9)
+        val (bc, br) = corners[idx]
+        val slots = listOf(1.9f to 1.9f, 4.1f to 1.9f, 1.9f to 4.1f, 4.1f to 4.1f)
+        val (dc, dr) = slots[token.id % 4]
+        return Offset((bc + dc) * cell, (br + dr) * cell)
     }
     if (token.isFinished) {
         return Offset(7.5f * cell, 7.5f * cell)
@@ -541,15 +519,122 @@ private fun computeClassicTokenOffset(
     if (token.isInHomeStretch) {
         val step = token.progress - 50
         val (col, row) = when (idx) {
-            0 -> step to 7
-            1 -> 7 to step
-            2 -> (14 - step) to 7
-            else -> 7 to (14 - step)
+            0 -> 7 to (14 - step)
+            1 -> step to 7
+            2 -> 7 to step
+            else -> (14 - step) to 7
         }
         return Offset((col + 0.5f) * cell, (row + 0.5f) * cell)
     }
     val startOffsets = listOf(0, 13, 26, 39)
-    val globalIdx = (startOffsets[idx] + token.progress) % 52
-    val (col, row) = perimeter[globalIdx]
+    val global = (startOffsets[idx] + token.progress) % 52
+    val (c, r) = perimeter[global]
+    return Offset((c + 0.5f) * cell, (r + 0.5f) * cell)
+}
+
+// =============================================================================
+// SNAKES & LADDERS 1-100 BOARD RENDERER (8 THEMES + 7 BOARDS)
+// =============================================================================
+
+@Composable
+fun SnakesAndLaddersCanvas(
+    theme: SnakesTheme,
+    boardLayout: SnakesBoardLayout,
+    players: List<Player>,
+    modifier: Modifier = Modifier
+) {
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .padding(8.dp)
+    ) {
+        val cell = size.width / 10f
+
+        // 1. 10x10 Boustrophedon Grid
+        for (row in 0 until 10) {
+            for (col in 0 until 10) {
+                val isEven = (row + col) % 2 == 0
+                drawRect(
+                    color = if (isEven) theme.boardBg else theme.altTile,
+                    topLeft = Offset(col * cell, row * cell),
+                    size = Size(cell, cell)
+                )
+                drawRect(
+                    color = Color.Black.copy(alpha = 0.25f),
+                    topLeft = Offset(col * cell, row * cell),
+                    size = Size(cell, cell),
+                    style = Stroke(width = 1.2f)
+                )
+            }
+        }
+
+        // 2. Draw Ladders (Blue/Wooden rails + rungs)
+        boardLayout.ladders.forEach { (startSq, endSq) ->
+            val p1 = squareToOffset(startSq, cell)
+            val p2 = squareToOffset(endSq, cell)
+            val dx = p2.x - p1.x
+            val dy = p2.y - p1.y
+            val len = hypot(dx, dy).coerceAtLeast(1f)
+            val nx = (-dy / len) * (cell * 0.16f)
+            val ny = (dx / len) * (cell * 0.16f)
+
+            drawLine(color = theme.ladderColor, start = Offset(p1.x + nx, p1.y + ny), end = Offset(p2.x + nx, p2.y + ny), strokeWidth = 5f)
+            drawLine(color = theme.ladderColor, start = Offset(p1.x - nx, p1.y - ny), end = Offset(p2.x - nx, p2.y - ny), strokeWidth = 5f)
+
+            val steps = (len / (cell * 0.35f)).toInt().coerceAtLeast(3)
+            for (s in 1 until steps) {
+                val t = s.toFloat() / steps
+                val rx = p1.x + dx * t
+                val ry = p1.y + dy * t
+                drawLine(
+                    color = theme.ladderColor,
+                    start = Offset(rx + nx, ry + ny),
+                    end = Offset(rx - nx, ry - ny),
+                    strokeWidth = 3.5f
+                )
+            }
+        }
+
+        // 3. Draw S-Curved Snakes
+        boardLayout.snakes.forEach { (headSq, tailSq) ->
+            val head = squareToOffset(headSq, cell)
+            val tail = squareToOffset(tailSq, cell)
+            val mid = Offset((head.x + tail.x) / 2f, (head.y + tail.y) / 2f)
+            val snakePath = Path().apply {
+                moveTo(head.x, head.y)
+                quadraticTo(mid.x + cell * 0.9f, (head.y + mid.y) / 2f, mid.x, mid.y)
+                quadraticTo(mid.x - cell * 0.9f, (mid.y + tail.y) / 2f, tail.x, tail.y)
+            }
+            drawPath(snakePath, color = theme.snakeColor, style = Stroke(width = 9f, cap = StrokeCap.Round))
+            drawPath(snakePath, color = Color.Yellow.copy(alpha = 0.7f), style = Stroke(width = 3f, cap = StrokeCap.Round))
+            drawCircle(color = theme.snakeColor, radius = cell * 0.22f, center = head)
+        }
+
+        // 4. Draw Players
+        players.forEachIndexed { idx, p ->
+            val pos = squareToOffset(p.snakesPosition, cell)
+            val shift = if (idx == 0) -cell * 0.14f else cell * 0.14f
+            drawCircle(
+                color = p.color,
+                radius = cell * 0.28f,
+                center = Offset(pos.x + shift, pos.y)
+            )
+            drawCircle(
+                color = Color.White,
+                radius = cell * 0.28f,
+                center = Offset(pos.x + shift, pos.y),
+                style = Stroke(width = 2.5f)
+            )
+        }
+    }
+}
+
+private fun squareToOffset(square: Int, cell: Float): Offset {
+    val clamped = square.coerceIn(1, 100) - 1
+    val rowFromBottom = clamped / 10
+    val colInRow = clamped % 10
+    val col = if (rowFromBottom % 2 == 0) colInRow else (9 - colInRow)
+    val row = 9 - rowFromBottom
     return Offset((col + 0.5f) * cell, (row + 0.5f) * cell)
 }
