@@ -53,10 +53,10 @@ fun LudovishBoardCanvas(
             .padding(6.dp)
             .pointerInput(state.players, state.currentTurnIndex, state.hasRolledThisTurn, state.gameMode) {
                 detectTapGestures { tap ->
-                    // In 5-10P mode, tapping the center polygon rolls the dice!
                     if (state.playerCount >= 5) {
                         val center = Offset(size.width / 2f, size.height / 2f)
-                        if (hypot(tap.x - center.x, tap.y - center.y) <= size.minDimension * 0.14f) {
+                        val minDim = minOf(size.width, size.height).toFloat()
+                        if (hypot(tap.x - center.x, tap.y - center.y) <= minDim * 0.14f) {
                             onCenterDiceTapped()
                             return@detectTapGestures
                         }
@@ -96,7 +96,6 @@ private fun DrawScope.drawAuthenticFourPlayerBoard(
     val gridSize = 15
     val cell = size.width / gridSize
 
-    // White Ludo King board background
     drawRoundRect(
         color = Color.White,
         topLeft = Offset.Zero,
@@ -104,13 +103,11 @@ private fun DrawScope.drawAuthenticFourPlayerBoard(
         cornerRadius = CornerRadius(12f, 12f)
     )
 
-    // Standard Ludo King corner colors: Bottom-Left = Blue(P0), Top-Left = Red(P1), Top-Right = Green(P2), Bottom-Right = Yellow(P3)
     val cBlue = state.players.getOrNull(0)?.color ?: TenPlayerColors[0]
     val cRed = state.players.getOrNull(1)?.color ?: TenPlayerColors[1]
     val cGreen = state.players.getOrNull(2)?.color ?: TenPlayerColors[2]
     val cYellow = state.players.getOrNull(3)?.color ?: TenPlayerColors[3]
 
-    // 1. Colored Home Stretches & Starting Squares
     for (i in 1..5) {
         drawRect(color = cBlue, topLeft = Offset(7 * cell, (14 - i) * cell), size = Size(cell, cell))
         drawRect(color = cRed, topLeft = Offset(i * cell, 7 * cell), size = Size(cell, cell))
@@ -122,7 +119,6 @@ private fun DrawScope.drawAuthenticFourPlayerBoard(
     drawRect(color = cGreen, topLeft = Offset(8 * cell, 1 * cell), size = Size(cell, cell))
     drawRect(color = cYellow, topLeft = Offset(13 * cell, 8 * cell), size = Size(cell, cell))
 
-    // 2. Grid lines on track cells
     for (r in 0 until gridSize) {
         for (c in 0 until gridSize) {
             val isTrack = (r in 6..8) || (c in 6..8)
@@ -138,7 +134,6 @@ private fun DrawScope.drawAuthenticFourPlayerBoard(
         }
     }
 
-    // 3. Safe Stars
     val starSquares = listOf(
         6 to 13, 2 to 8, 1 to 6, 6 to 2,
         8 to 1, 12 to 6, 13 to 8, 8 to 12
@@ -151,12 +146,11 @@ private fun DrawScope.drawAuthenticFourPlayerBoard(
         )
     }
 
-    // 4. Four Corner Home Yards (with inner white box & 4 colored circles like video)
     val corners = listOf(
-        Triple(0, 9, cBlue),   // Bottom-Left (P1)
-        Triple(0, 0, cRed),    // Top-Left (P2)
-        Triple(9, 0, cGreen),  // Top-Right (P3)
-        Triple(9, 9, cYellow)  // Bottom-Right (P4)
+        Triple(0, 9, cBlue),
+        Triple(0, 0, cRed),
+        Triple(9, 0, cGreen),
+        Triple(9, 9, cYellow)
     )
     corners.forEachIndexed { idx, (col, row, color) ->
         val topLeft = Offset(col * cell, row * cell)
@@ -183,7 +177,6 @@ private fun DrawScope.drawAuthenticFourPlayerBoard(
             )
         }
 
-        // Team A / Team B badges in corners when Team Up is active (matches video 02:10)
         if (state.gameMode == GameMode.TEAM_UP) {
             val badgeCenter = when (idx) {
                 0 -> Offset(5.4f * cell, 9.6f * cell)
@@ -205,7 +198,6 @@ private fun DrawScope.drawAuthenticFourPlayerBoard(
         }
     }
 
-    // 5. Center 4-Triangle Crown
     val cx = 7.5f * cell
     val cy = 7.5f * cell
     val cLeft = 6f * cell
@@ -224,7 +216,6 @@ private fun DrawScope.drawAuthenticFourPlayerBoard(
     drawPath(triRight, color = cYellow)
     drawRect(color = Color.Black, topLeft = Offset(cLeft, cTop), size = Size(3 * cell, 3 * cell), style = Stroke(width = 2f))
 
-    // 6. Render Tokens
     val perimeter = buildAuthentic52Track()
     state.players.forEach { player ->
         player.tokens.forEach { token ->
@@ -248,10 +239,6 @@ private fun DrawScope.drawAuthenticFourPlayerBoard(
     }
 }
 
-/**
- * Renders the true Pentagon (5P), Hexagon (6P), Heptagon (7P), Octagon (8P), Nonagon (9P), and Decagon (10P)
- * geometric boards exactly like Ludo King 5P/6P in Video 2 (01:20 - 01:55)
- */
 private fun DrawScope.drawPolygonalMultiPlayerBoard(
     state: GameUiState,
     pulseScale: Float,
@@ -264,7 +251,6 @@ private fun DrawScope.drawPolygonalMultiPlayerBoard(
     val sectorAngle = (2.0 * PI / n)
     val startBaseAngle = (PI / 2.0) - (sectorAngle / 2.0)
 
-    // 1. Draw N Outer Polygon Sectors (Triangular Home Yards + 3-Column Radial Arms)
     for (i in 0 until n) {
         val player = state.players.getOrNull(i)
         val pColor = player?.color ?: TenPlayerColors[i % TenPlayerColors.size]
@@ -277,7 +263,6 @@ private fun DrawScope.drawPolygonalMultiPlayerBoard(
         val c1 = Offset(center.x + (innerR * cos(a1)).toFloat(), center.y + (innerR * sin(a1)).toFloat())
         val c2 = Offset(center.x + (innerR * cos(a2)).toFloat(), center.y + (innerR * sin(a2)).toFloat())
 
-        // Colored Triangular Home Base on Left half of sector
         val edgeMid = Offset((v1.x + v2.x) / 2f, (v1.y + v2.y) / 2f)
         val innerMid = Offset((c1.x + c2.x) / 2f, (c1.y + c2.y) / 2f)
 
@@ -291,7 +276,6 @@ private fun DrawScope.drawPolygonalMultiPlayerBoard(
         drawPath(yardPath, color = pColor)
         drawPath(yardPath, color = Color.Black, style = Stroke(width = 2.5f))
 
-        // White inner triangle inside yard for the 4 tokens
         val yardCenter = Offset(
             (v1.x + edgeMid.x + innerMid.x + c1.x) / 4f,
             (v1.y + edgeMid.y + innerMid.y + c1.y) / 4f
@@ -299,7 +283,6 @@ private fun DrawScope.drawPolygonalMultiPlayerBoard(
         drawCircle(color = Color.White, radius = outerR * 0.14f, center = yardCenter)
         drawCircle(color = Color.Black, radius = outerR * 0.14f, center = yardCenter, style = Stroke(width = 1.8f))
 
-        // Radial 3-Column Track Arm on Right half of sector
         val trackPath = Path().apply {
             moveTo(edgeMid.x, edgeMid.y)
             lineTo(v2.x, v2.y)
@@ -310,7 +293,6 @@ private fun DrawScope.drawPolygonalMultiPlayerBoard(
         drawPath(trackPath, color = Color.White)
         drawPath(trackPath, color = Color.Black, style = Stroke(width = 2f))
 
-        // Colored Center Home Stretch inside the Radial Arm
         for (step in 1..5) {
             val t = step / 6f
             val rStep = outerR * (1f - t) + innerR * t
@@ -322,7 +304,6 @@ private fun DrawScope.drawPolygonalMultiPlayerBoard(
             drawCircle(color = pColor, radius = outerR * 0.042f, center = pos)
         }
 
-        // Render Player's 4 Tokens
         player?.tokens?.forEach { token ->
             val tokenPos = when {
                 token.isInBase -> {
@@ -380,7 +361,6 @@ private fun DrawScope.drawPolygonalMultiPlayerBoard(
         }
     }
 
-    // 2. Central Polygon Crown + Center 3D Dice Box (matches 5P/6P video 01:23 & 01:42)
     val centerPoly = Path().apply {
         for (i in 0 until n) {
             val a = startBaseAngle + i * sectorAngle
@@ -394,7 +374,6 @@ private fun DrawScope.drawPolygonalMultiPlayerBoard(
     drawPath(centerPoly, color = Color(0xFF0A192F))
     drawPath(centerPoly, color = Color.White, style = Stroke(width = 3f))
 
-    // Draw Center Dice in 5P-10P mode
     val diceBoxSize = innerR * 1.15f
     drawRoundRect(
         color = activeColor,
@@ -410,7 +389,6 @@ private fun DrawScope.drawPolygonalMultiPlayerBoard(
         style = Stroke(width = 2.5f)
     )
 
-    // Pips on center dice
     val pipR = diceBoxSize * 0.09f
     drawCircle(color = Color.White, radius = pipR, center = center)
     if (state.diceValue >= 2) {
@@ -532,10 +510,6 @@ private fun computeFourPlayerTokenOffset(
     return Offset((c + 0.5f) * cell, (r + 0.5f) * cell)
 }
 
-// =============================================================================
-// SNAKES & LADDERS 1-100 BOARD RENDERER (8 THEMES + 7 BOARDS)
-// =============================================================================
-
 @Composable
 fun SnakesAndLaddersCanvas(
     theme: SnakesTheme,
@@ -551,7 +525,6 @@ fun SnakesAndLaddersCanvas(
     ) {
         val cell = size.width / 10f
 
-        // 1. 10x10 Boustrophedon Grid
         for (row in 0 until 10) {
             for (col in 0 until 10) {
                 val isEven = (row + col) % 2 == 0
@@ -569,7 +542,6 @@ fun SnakesAndLaddersCanvas(
             }
         }
 
-        // 2. Draw Ladders (Blue/Wooden rails + rungs)
         boardLayout.ladders.forEach { (startSq, endSq) ->
             val p1 = squareToOffset(startSq, cell)
             val p2 = squareToOffset(endSq, cell)
@@ -596,7 +568,6 @@ fun SnakesAndLaddersCanvas(
             }
         }
 
-        // 3. Draw S-Curved Snakes
         boardLayout.snakes.forEach { (headSq, tailSq) ->
             val head = squareToOffset(headSq, cell)
             val tail = squareToOffset(tailSq, cell)
@@ -611,7 +582,6 @@ fun SnakesAndLaddersCanvas(
             drawCircle(color = theme.snakeColor, radius = cell * 0.22f, center = head)
         }
 
-        // 4. Draw Players
         players.forEachIndexed { idx, p ->
             val pos = squareToOffset(p.snakesPosition, cell)
             val shift = if (idx == 0) -cell * 0.14f else cell * 0.14f

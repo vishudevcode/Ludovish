@@ -1,5 +1,6 @@
 package com.ludovish.app.viewmodel
 
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ludovish.app.core.CareerManager
@@ -58,10 +59,6 @@ class LudovishViewModel : ViewModel() {
         }
     }
 
-    // =========================================================================
-    // NAVIGATION, HUB & MODAL CONTROLS
-    // =========================================================================
-
     fun skipSplash() {
         _uiState.update { it.copy(currentScreen = AppScreen.LUDO_HOME) }
     }
@@ -104,10 +101,6 @@ class LudovishViewModel : ViewModel() {
     fun toggleBottomLeftMenu() {
         _uiState.update { it.copy(showBottomLeftMenuPopup = !it.showBottomLeftMenuPopup) }
     }
-
-    // =========================================================================
-    // PROFILE, SETTINGS & LIQUID GLASS CUSTOMIZATION
-    // =========================================================================
 
     fun updateProfile(name: String, status: String, country: String, avatarIdx: Int) {
         updateCareer {
@@ -159,10 +152,6 @@ class LudovishViewModel : ViewModel() {
     fun selectBoardTheme(theme: LudoBoardTheme) {
         _uiState.update { it.copy(boardTheme = theme) }
     }
-
-    // =========================================================================
-    // LUDO PRE-MATCH LOBBY & SETUP (2P TO 10P)
-    // =========================================================================
 
     fun openLudoSetupForHub(entryType: HubEntryType) {
         val defaultMode = when (entryType) {
@@ -320,10 +309,6 @@ class LudovishViewModel : ViewModel() {
         }
     }
 
-    // =========================================================================
-    // SAVE & LOAD GAME DATABASE ENGINE
-    // =========================================================================
-
     fun saveCurrentGameAndExit() {
         val state = _uiState.value
         if (state.players.isEmpty()) {
@@ -419,10 +404,6 @@ class LudovishViewModel : ViewModel() {
             )
         }
     }
-
-    // =========================================================================
-    // ACTIVE LUDO GAMEPLAY & RUSH MODE ENGINE
-    // =========================================================================
 
     fun rollDiceForPlayer(
         playerIndex: Int = _uiState.value.currentTurnIndex,
@@ -749,10 +730,6 @@ class LudovishViewModel : ViewModel() {
         }
     }
 
-    // =========================================================================
-    // SNAKES & LADDERS THEME, BOARD & GAMEPLAY ENGINE
-    // =========================================================================
-
     fun openSnakesThemeSelector() {
         _uiState.update { it.copy(currentScreen = AppScreen.SNAKES_THEME_SELECT) }
     }
@@ -821,7 +798,6 @@ class LudovishViewModel : ViewModel() {
                     delay(85)
                 }
 
-                // Check Ladder climb or Snake bite slide
                 val finalSquare = layout.ladders[targetPos] ?: layout.snakes[targetPos] ?: targetPos
                 if (finalSquare != targetPos) {
                     delay(220)

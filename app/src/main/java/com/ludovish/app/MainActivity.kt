@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,11 +16,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ludovish.app.core.CareerManager
@@ -252,7 +249,6 @@ private fun LudoHomeDashboard(
             onSettingsClick = onSettingsClick
         )
 
-        // Central Crown Logo Banner (matches video 00:00)
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(text = "👑", fontSize = 36.sp)
             Text(
@@ -270,7 +266,6 @@ private fun LudoHomeDashboard(
             )
         }
 
-        // Mode Hub Buttons (Team Up, Computer, Pass N Play, Tournament)
         Column(
             modifier = Modifier.fillMaxWidth(0.88f),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -320,7 +315,6 @@ private fun LudoHomeDashboard(
                 )
             }
 
-            // Bottom Floating Switcher Row: Snakes & Ladders 7-Icon + Daily Free Spin
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -534,7 +528,6 @@ private fun LudoActiveGameplayScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Top Corner Dice Trays (for 2-4P mode: P1 Top-Left Red, P2 Top-Right Green)
             if (state.playerCount <= 4) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
@@ -567,7 +560,6 @@ private fun LudoActiveGameplayScreen(
                     }
                 }
             } else {
-                // 5P to 10P Header Turn Banner
                 val activeP = state.players.getOrNull(state.currentTurnIndex)
                 Row(
                     modifier = Modifier
@@ -588,7 +580,6 @@ private fun LudoActiveGameplayScreen(
                 }
             }
 
-            // Center Ludo Board (4P Square or 5P-10P Polygon)
             Box(contentAlignment = Alignment.Center) {
                 LudovishBoardCanvas(
                     state = state,
@@ -596,8 +587,7 @@ private fun LudoActiveGameplayScreen(
                     onCenterDiceTapped = { onRollDice(state.currentTurnIndex) }
                 )
 
-                // "GAME START" Banner Overlay (matches video 00:34 & 01:20)
-                AnimatedVisibility(visible = state.showGameStartBanner) {
+                if (state.showGameStartBanner) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(0.85f)
@@ -618,7 +608,6 @@ private fun LudoActiveGameplayScreen(
                 }
             }
 
-            // Bottom Corner Dice Trays (for 2-4P mode: P0 Bottom-Left Blue, P3 Bottom-Right Yellow)
             if (state.playerCount <= 4) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
@@ -653,7 +642,6 @@ private fun LudoActiveGameplayScreen(
             }
         }
 
-        // Bottom-Left Menu Button + Popup ("Exit" / "Rules" like video 00:53 & 02:23)
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
