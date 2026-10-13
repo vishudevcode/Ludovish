@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer Floating Glass Squircle Frame -->
+    <path
+        android:pathData="M34,22 L74,22 A12,12 0 0,1 86,34 L86,74 A12,12 0 0,1 74,86 L34,86 A12,12 0 0,1 22,74 L22,34 A12,12 0 0,1 34,22 Z"
+        android:strokeWidth="1.5">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="22"
+                android:startY="22"
+                android:endX="86"
+                android:endY="86"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#40FFFFFF" />
+                <item android:offset="0.5" android:color="#18FFFFFF" />
+                <item android:offset="1.0" android:color="#3000F5D4" />
+            </gradient>
+        </aapt:attr>
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:startX="22"
+                android:startY="22"
+                android:endX="86"
+                android:endY="86"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#CCFFFFFF" />
+                <item android:offset="0.5" android:color="#44FFFFFF" />
+                <item android:offset="1.0" android:color="#9900F5D4" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- 4 Ludo Corner Liquid Gems -->
+    <!-- Top-Left: Crimson Red -->
+    <path
+        android:pathData="M36,36m-7.5,0a7.5,7.5 0,1 1,15 0a7.5,7.5 0,1 1,-15 0"
+        android:fillColor="#FFFF3B5C"
+        android:strokeWidth="1.2"
+        android:strokeColor="#B3FFFFFF" />
+
+    <!-- Top-Right: Neon Emerald -->
+    <path
+        android:pathData="M72,36m-7.5,0a7.5,7.5 0,1 1,15 0a7.5,7.5 0,1 1,-15 0"
+        android:fillColor="#FF00E575"
+        android:strokeWidth="1.2"
+        android:strokeColor="#B3FFFFFF" />
+
+    <!-- Bottom-Left: Electric Azure -->
+    <path
+        android:pathData="M36,72m-7.5,0a7.5,7.5 0,1 1,15 0a7.5,7.5 0,1 1,-15 0"
+        android:fillColor="#FF0A84FF"
+        android:strokeWidth="1.2"
+        android:strokeColor="#B3FFFFFF" />
+
+    <!-- Bottom-Right: Cyber Gold -->
+    <path
+        android:pathData="M72,72m-7.5,0a7.5,7.5 0,1 1,15 0a7.5,7.5 0,1 1,-15 0"
+        android:fillColor="#FFFFD60A"
+        android:strokeWidth="1.2"
+        android:strokeColor="#B3FFFFFF" />
+
+    <!-- Center 3D Liquid Glass Ludo Pawn Drop Shadow -->
+    <path
+        android:pathData="M54,73m-11,0a11,4.5 0,1 0,22 0a11,4.5 0,1 0,-22 0"
+        android:fillColor="#66000000" />
+
+    <!-- Center 3D Teardrop Ludo King Pawn Body -->
+    <path
+        android:pathData="M54,31 C65,43 66,61 54,71 C42,61 43,43 54,31 Z"
+        android:strokeWidth="1.8"
+        android:strokeColor="#FFFFFFFF">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="44"
+                android:startY="32"
+                android:endX="64"
+                android:endY="71"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#FFFFFFFF" />
+                <item android:offset="0.45" android:color="#FF00F5D4" />
+                <item android:offset="1.0" android:color="#FF0A84FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Inner Specular Glass Highlight on Pawn -->
+    <path
+        android:pathData="M54,45m-4.2,0a4.2,4.2 0,1 1,8.4 0a4.2,4.2 0,1 1,-8.4 0"
+        android:fillColor="#D9FFFFFF" />
+</vector>
